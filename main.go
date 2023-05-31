@@ -65,7 +65,7 @@ var debugLog *log.Logger = log.New()
 
 // startConnectionAndMessageManager runs a goroutine that tracks connections to the chat
 // server, and processes messages submitted by connections.
-func startConnectionAndMessageManager(stopCh <-chan struct{}, addConnCh, removeConnCh chan *connection, addMessageCh chan message) {
+func startConnectionAndMessageManager(stopCh chan os.Signal, addConnCh, removeConnCh chan *connection, addMessageCh chan message) {
 	var currentConnections []*connection
 	var cleaningUp bool // Indicates goroutines are in the process of cleaning up, to exit
 	go func() {
@@ -90,8 +90,8 @@ func startConnectionAndMessageManager(stopCh <-chan struct{}, addConnCh, removeC
 				debugLog.Printf("processing new message from %s: %s", newMessage.connection.Nickname(), newMessage.text)
 				cleaningUp = true
 				go broadcast(newMessage, currentConnections, removeConnCh, false)
-			case <-stopCh:
-				debugLog.Printf("cleaning up and exiting")
+			case stopSig := <-stopCh:
+				debugLog.Printf("received signal %v, cleaning up and exiting", stopSig)
 				go broadcast(message{
 					text:       "You are being disconnected because the chat-server is exiting. So long...",
 					connection: nil, // no connection because this is a system message
@@ -151,7 +151,7 @@ func broadcast(msg message, allConnections []*connection, removeConnCh chan *con
 	for _, con := range allConnections {
 		var sender string
 		if msg.connection == nil {
-			sender = "system"
+			sender = "system:"
 		} else if msg.connection != nil && con.UniqueID() == msg.connection.UniqueID() {
 			sender = ">" // this recipient is the message-sender
 		} else {
@@ -196,19 +196,6 @@ func processCommands(input string, con *connection) (clientIsLeaving bool) {
 // createSignalHandler returns a channel that will be closed when SIGTERM
 // and SIGINT signals are received.
 // This channel can then be used to trigger cleanup and exit.
-func createSignalHandler() (stopChannel <-chan struct{}) {
-	stop := make(chan struct{})
-	// Create another channel that receives SIGTERM and SIGINT signals and triggers cleanup and exit.
-	ch := make(chan os.Signal, 2)
-	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-ch
-		debugLog.Printf("received signal %s, exiting...\n", sig)
-		close(stop)
-	}()
-	return stop
-}
-
 func main() {
 	debugLog.SetFormatter(&log.TextFormatter{
 		PadLevelText: true,
@@ -220,7 +207,8 @@ func main() {
 		debugLog.Fatalf("cannot listen: %v", err)
 	}
 	debugLog.Printf("listening for connections on %s", listenAddress)
-	stopCh := createSignalHandler()
+	stopCh := make(chan os.Signal, 2)
+	signal.Notify(stopCh, syscall.SIGINT, syscall.SIGTERM)
 	addConnCh := make(chan *connection)
 	removeConnCh := make(chan *connection)
 	addMessageCh := make(chan message)
