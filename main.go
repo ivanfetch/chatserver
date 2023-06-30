@@ -1,5 +1,11 @@
 package main
 
+// This multi-user chat server helps me learn concurrency.
+// This is a learning project, please don't count on it improving, or even
+// working entirely well.
+// You can use nc or telnet to connect to localhost port 8080,
+// and chat with this server.
+
 import (
 	"bufio"
 	"fmt"
@@ -7,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 
 	log "github.com/sirupsen/logrus"
@@ -26,7 +33,8 @@ func newConnection(netConn net.Conn) *connection {
 	}
 }
 
-// Close wraps the Close method of the member net.Conn type.
+// Close wraps the Close method of the member net.Conn type to register that
+// this connection has been closed.
 func (c *connection) Close() {
 	debugLog.Printf("closing connection %s", c.UniqueID())
 	c.isClosed = true
@@ -89,12 +97,41 @@ func (m message) String() string {
 
 var debugLog *log.Logger = log.New()
 
-// startConnectionAndMessageManager runs a goroutine that tracks connections to the chat
-// server, and processes messages submitted by connections.
-func startConnectionAndMessageManager(listener net.Listener, stopCh <-chan struct{}, addConnCh, removeConnCh chan *connection, addMessageCh chan message) {
-	var currentConnections []*connection
-	var cleaningUp bool // Indicates goroutines are in the process of cleaning up, to exit
+// startConnectionAccepter runs a goroutine that accepts connections to the
+// chat server, and adds them to the connection-manager. A goroutine is also
+// spawned to process any input from the connection.
+func startConnectionAccepter(listener net.Listener, exitWG *sync.WaitGroup, stopCh <-chan struct{}, addConnCh, removeConnCh chan *connection, addMessageCh chan message) {
 	go func() {
+		defer exitWG.Done()
+		debugLog.Println("starting connection accepter")
+		for {
+			select {
+			case <-stopCh:
+				debugLog.Println("no longer accepting connections")
+				return
+			default:
+				netConn, err := listener.Accept()
+				if err != nil {
+					debugLog.Printf("while accepting a connection: %v", err)
+					continue
+				}
+				debugLog.Printf("accepted connection from %s", netConn.RemoteAddr())
+				conn := newConnection(netConn)
+				addConnCh <- conn
+				exitWG.Add(1)
+				go processInput(conn, exitWG, addMessageCh, removeConnCh)
+			}
+		}
+	}()
+}
+
+// startConnectionAndMessageManager runs a goroutine that tracks connections to the chat
+// server, and broadcasts chat messages to all connections.
+func startConnectionAndMessageManager(listener net.Listener, exitWG *sync.WaitGroup, stopCh <-chan struct{}, addConnCh, removeConnCh chan *connection, addMessageCh chan message) {
+	var currentConnections []*connection
+	var alreadyCleaningUp bool // Indicates goroutines are in the process of cleaning up, to exit
+	go func() {
+		defer exitWG.Done()
 		debugLog.Println("starting connection manager")
 		for {
 			select {
@@ -103,7 +140,7 @@ func startConnectionAndMessageManager(listener net.Listener, stopCh <-chan struc
 				currentConnections = append(currentConnections, newConn)
 			case removeConn := <-removeConnCh:
 				if removeConn != nil {
-					debugLog.Printf("removing connection %s", removeConn.UniqueID())
+					debugLog.Printf("closing and removing connection %s", removeConn.UniqueID())
 					newConnections := make([]*connection, len(currentConnections)-1)
 					newI := 0
 					for _, conn := range currentConnections {
@@ -116,43 +153,49 @@ func startConnectionAndMessageManager(listener net.Listener, stopCh <-chan struc
 					removeConn.Close()
 				}
 			case newMessage := <-addMessageCh:
-				debugLog.Printf("processing new message from %s: %s", newMessage.connection.Nickname(), newMessage.text)
-				go broadcast(newMessage, currentConnections, removeConnCh, false)
+				debugLog.Printf("broadcasting a new message from %s: %s", newMessage.connection.Nickname(), newMessage.text)
+				exitWG.Add(1)
+				go broadcast(newMessage, currentConnections, exitWG, removeConnCh, false)
 			case <-stopCh:
-				if !cleaningUp {
+				if !alreadyCleaningUp {
 					debugLog.Printf("the connection manager is starting clean up")
-					cleaningUp = true
+					alreadyCleaningUp = true
 					listener.Close()
 					go broadcast(message{
 						text:       "You are being disconnected because the chat-server is exiting. So long...",
 						connection: &connection{nickname: "system"},
-					}, currentConnections, removeConnCh, true)
+					}, currentConnections, exitWG, removeConnCh, true)
 				}
 			default:
 				// Avoid blocking thecontaining loop
 			}
-			if cleaningUp && len(currentConnections) == 0 {
+			if alreadyCleaningUp && len(currentConnections) == 0 {
 				break
 			}
 		}
-		if cleaningUp {
+		if alreadyCleaningUp {
 			debugLog.Printf("the connection manager has finished cleaning up")
 		}
 		debugLog.Println("connection manager exiting")
 	}()
 }
 
-// processInput scans a chat connection for text and hands chat commands or
+// processInput scans a chat connection for text, and hands chat commands or
 // messages.
-func processInput(con *connection, addMessageCh chan message, removeConnCh chan *connection) {
+func processInput(con *connection, exitWG *sync.WaitGroup, addMessageCh chan message, removeConnCh chan *connection) {
+	defer exitWG.Done()
 	debugLog.Printf("saying hello then reading input from connection %s", con.UniqueID())
 	fmt.Fprintln(con, `Well hello there!
 
-Anything you type to me will be displayed in the output of this chat-server.
+Anything you type will be sent to all other users of this chat server.
+A line that begins with a slash (/) is considered a command - enter /help for a list of valid commands.
 `)
 	scanner := bufio.NewScanner(con)
 	for scanner.Scan() {
 		line := scanner.Text()
+		if line == "" {
+			continue
+		}
 		debugLog.Printf("received from %s: %s", con.UniqueID(), line)
 		if strings.HasPrefix(line, "/") {
 			exiting := processCommands(line, con)
@@ -171,11 +214,15 @@ Anything you type to me will be displayed in the output of this chat-server.
 	if !con.isClosed && err != nil {
 		debugLog.Printf("while reading from %s: %v", con.UniqueID(), err)
 	}
-	debugLog.Printf("reading input is exiting for connection %s", con.UniqueID())
+	debugLog.Printf("input processing is exiting for connection %s", con.UniqueID())
 }
 
-func broadcast(msg message, allConnections []*connection, removeConnCh chan *connection, disconnect bool) {
-	if disconnect {
+// broadcast sends the specified message to all chat-server connections. If
+// finalBroadcast is true then all connections will be disconnected and
+// removed after the message has been sent to them.
+func broadcast(msg message, allConnections []*connection, exitWG *sync.WaitGroup, removeConnCh chan *connection, finalBroadcast bool) {
+	defer exitWG.Done()
+	if finalBroadcast {
 		debugLog.Printf("broadcasting to, then disconnecting, %d connections: %s", len(allConnections), msg)
 	} else {
 		debugLog.Printf("broadcasting to %d connections: %s", len(allConnections), msg)
@@ -191,15 +238,18 @@ func broadcast(msg message, allConnections []*connection, removeConnCh chan *con
 		if err != nil {
 			debugLog.Printf("error writing to %v: %v", con.netConn, err)
 			removeConnCh <- con
-			return
+			continue
 		}
-		if disconnect {
+		if finalBroadcast {
 			debugLog.Printf("disconnecting connection %s", con.UniqueID())
 			removeConnCh <- con
 		}
 	}
 }
 
+// processCommands handles the specified string as a chat-server command. If
+// the command would cause this connection to exit, clientIsLeaving will be
+// set to true.
 func processCommands(input string, con *connection) (clientIsLeaving bool) {
 	fields := strings.Fields(input)
 	switch strings.ToLower(fields[0][1:]) { // first word minus its first character(/)
@@ -210,6 +260,7 @@ func processCommands(input string, con *connection) (clientIsLeaving bool) {
 	case "nickname", "nick":
 		if len(fields) > 1 && fields[1] != "" {
 			debugLog.Printf("changing nickname from %q to %q", con.Nickname(), fields[1])
+			fmt.Fprintf(con, "You are now known as %q instead of %q\n", fields[1], con.Nickname())
 			con.nickname = fields[1]
 		}
 	case "help":
@@ -224,16 +275,18 @@ func processCommands(input string, con *connection) (clientIsLeaving bool) {
 }
 
 // createSignalHandler returns a channel that will be closed when SIGTERM
-// and SIGINT signals are received.
-// This channel can then be used to trigger cleanup and exit.
+// and SIGINT signals are received by a goroutine.
+// When the returned channel is readable, it means goroutines should start cleaning
+// up, then exit.
 func createSignalHandler() (stopChannel <-chan struct{}) {
 	stop := make(chan struct{})
-	// Create another channel that receives SIGTERM and SIGINT signals and triggers cleanup and exit.
+	// Create another channel that receives SIGTERM and SIGINT signals and
+	// closes the above channel.
 	ch := make(chan os.Signal, 2)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		sig := <-ch
-		debugLog.Printf("received signal %s, exiting...\n", sig)
+		debugLog.Printf("received signal %s, triggering cleanup and exit...\n", sig)
 		close(stop)
 	}()
 	return stop
@@ -250,28 +303,15 @@ func main() {
 		debugLog.Fatalf("cannot listen: %v", err)
 	}
 	debugLog.Printf("listening for connections on %s", listenAddress)
+	exitWG := &sync.WaitGroup{}
 	stopCh := createSignalHandler()
 	addConnCh := make(chan *connection)
 	removeConnCh := make(chan *connection)
 	addMessageCh := make(chan message)
-	startConnectionAndMessageManager(l, stopCh, addConnCh, removeConnCh, addMessageCh)
-	debugLog.Println("waiting for new connections")
-continueToListen:
-	for {
-		select {
-		case <-stopCh:
-			debugLog.Println("no longer accepting connections")
-			break continueToListen
-		default:
-			netConn, err := l.Accept()
-			if err != nil {
-				debugLog.Printf("while accepting a connection: %v", err)
-				continue
-			}
-			debugLog.Printf("accepted connection from %s", netConn.RemoteAddr())
-			conn := newConnection(netConn)
-			addConnCh <- conn
-			go processInput(conn, addMessageCh, removeConnCh)
-		}
-	}
+	exitWG.Add(1)
+	startConnectionAccepter(l, exitWG, stopCh, addConnCh, removeConnCh, addMessageCh)
+	exitWG.Add(1)
+	startConnectionAndMessageManager(l, exitWG, stopCh, addConnCh, removeConnCh, addMessageCh)
+	exitWG.Wait()
+	debugLog.Println("all cleanup is done, program exiting")
 }
