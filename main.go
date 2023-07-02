@@ -9,6 +9,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -98,6 +99,7 @@ func (m message) String() string {
 // Server holds the TCP listener, configuration, and communication
 // channels used by goroutines.
 type Server struct {
+	listenAddress           string // host:port or :port
 	listener                net.Listener
 	addConnCh, removeConnCh chan *connection
 	addMessageCh            chan message
@@ -107,28 +109,53 @@ type Server struct {
 	shuttingDown            bool // cleanup / shutdown is in-process, do not accept new connections or messages.
 }
 
-// NewServer returns a type Server.
-func NewServer() (*Server, error) {
-	const listenAddress = ":8080"
-	listener, err := net.Listen("tcp", listenAddress)
-	if err != nil {
-		return nil, fmt.Errorf("cannot listen on %s: %v", listenAddress, err)
+// ServerOption uses a function  to set fields on a type Server by operating on
+// that type as an argument.
+// This provides optional configuration and minimizes required parameters for
+// the constructor.
+type ServerOption func(*Server) error
+
+// WithListenAddress sets the corresponding field in a Server type.
+func WithListenAddress(l string) ServerOption {
+	return func(s *Server) error {
+		if l == "" || !strings.Contains(l, ":") {
+			return errors.New("please specify the listen address as host:port or :port")
+		}
+		s.listenAddress = l
+		return nil
 	}
-	debugLog.Printf("listening for connections on %s", listenAddress)
+}
+
+// NewServer returns *Server, accepting optional parameters via With*()
+// functional options.
+func NewServer(options ...ServerOption) (*Server, error) {
 	openForBusiness, stopReceivingSignals := signal.NotifyContext(context.Background(), os.Interrupt)
 	addConnCh := make(chan *connection)
 	removeConnCh := make(chan *connection)
 	addMessageCh := make(chan message)
 	exitWG := &sync.WaitGroup{}
-	return &Server{
-		listener:             listener,
+	s := &Server{
+		listenAddress:        ":8080",
 		openForBusiness:      openForBusiness,
 		stopReceivingSignals: stopReceivingSignals,
 		addConnCh:            addConnCh,
 		removeConnCh:         removeConnCh,
 		addMessageCh:         addMessageCh,
 		exitWG:               exitWG,
-	}, nil
+	}
+	for _, option := range options {
+		err := option(s)
+		if err != nil {
+			return nil, err
+		}
+	}
+	listener, err := net.Listen("tcp", s.listenAddress)
+	if err != nil {
+		return nil, fmt.Errorf("cannot listen on %s: %v", s.listenAddress, err)
+	}
+	s.listener = listener
+	debugLog.Printf("listening for connections on %s", s.listenAddress)
+	return s, nil
 }
 
 var debugLog *log.Logger = log.New()
@@ -193,17 +220,21 @@ func (s *Server) startConnectionAndMessageManager() {
 				}
 			case <-s.openForBusiness.Done():
 				if !s.shuttingDown {
-					debugLog.Printf("the connection manager is starting clean up")
+					debugLog.Println("signal received - the connection manager is starting clean up")
 					s.shuttingDown = true
 					s.stopReceivingSignals()
 					s.listener.Close() // will unblock listener.Accept()
-					debugLog.Println("adding a system message about the chat server shutting down")
-					go func() { // Avoid blocking when assigning to a channel read within the same select
-						s.addMessageCh <- message{
-							text:       "You are being disconnected because the chat-server is exiting. So long...",
-							connection: &connection{nickname: "system"},
-						}
-					}()
+					if len(currentConnections) > 0 {
+						debugLog.Println("adding a system message about the chat server shutting down")
+						go func() { // Avoid blocking when assigning to a channel read within the same select
+							/*
+							   s.addMessageCh <- message{
+							   								text:       "You are being disconnected because the chat-server is exiting. So long...",
+							   								connection: &connection{nickname: "system"},
+							   							}
+							*/
+						}()
+					}
 				}
 			default:
 				// Avoid blocking thecontaining loop
