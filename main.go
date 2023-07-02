@@ -75,9 +75,9 @@ func (c connection) UniqueID() string {
 	return remoteAddr
 }
 
-// Nickname returns the nickname for the chat connection if it has been set,
+// GetNickname returns the nickname for the chat connection if it has been set,
 // otherwise the TCP IP address and port are returned.
-func (c connection) Nickname() string {
+func (c connection) GetNickname() string {
 	if c.nickname != "" {
 		return c.nickname
 	}
@@ -92,7 +92,7 @@ type message struct {
 
 // String formats the message sender and text.
 func (m message) String() string {
-	return fmt.Sprintf("%s: %s\n", m.connection.Nickname(), m.text)
+	return fmt.Sprintf("%s: %s\n", m.connection.GetNickname(), m.text)
 }
 
 // Server holds the TCP listener, configuration, and communication
@@ -187,18 +187,23 @@ func (s *Server) startConnectionAndMessageManager() {
 					removeConn.Close()
 				}
 			case newMessage := <-s.addMessageCh:
-				debugLog.Printf("broadcasting a new message from %s: %s", newMessage.connection.Nickname(), newMessage.text)
-				go s.broadcast(newMessage, currentConnections, false)
+				debugLog.Printf("broadcasting a new message from %s to %d connections: %s", newMessage.connection.GetNickname(), len(currentConnections), newMessage.text)
+				for _, conn := range currentConnections {
+					s.send(newMessage, conn)
+				}
 			case <-s.openForBusiness.Done():
 				if !s.shuttingDown {
 					debugLog.Printf("the connection manager is starting clean up")
 					s.shuttingDown = true
 					s.stopReceivingSignals()
 					s.listener.Close() // will unblock listener.Accept()
-					go s.broadcast(message{
-						text:       "You are being disconnected because the chat-server is exiting. So long...",
-						connection: &connection{nickname: "system"},
-					}, currentConnections, true)
+					debugLog.Println("adding a system message about the chat server shutting down")
+					go func() { // Avoid blocking when assigning to a channel read within the same select
+						s.addMessageCh <- message{
+							text:       "You are being disconnected because the chat-server is exiting. So long...",
+							connection: &connection{nickname: "system"},
+						}
+					}()
 				}
 			default:
 				// Avoid blocking thecontaining loop
@@ -249,35 +254,32 @@ A line that begins with a slash (/) is considered a command - enter /help for a 
 	debugLog.Printf("input processing is exiting for connection %s", con.UniqueID())
 }
 
-// broadcast sends the specified message to all chat-server connections. If
-// finalBroadcast is true then all connections will be disconnected and
-// removed after the message has been sent to them.
-func (s *Server) broadcast(msg message, allConnections []*connection, finalBroadcast bool) {
+// send spawns a goroutine to write the specified message to the specified
+// connection.
+func (s *Server) send(msg message, conn *connection) {
 	s.exitWG.Add(1)
-	defer s.exitWG.Done()
-	if finalBroadcast {
-		debugLog.Printf("broadcasting to, then disconnecting, %d connections: %s", len(allConnections), msg)
-	} else {
-		debugLog.Printf("broadcasting to %d connections: %s", len(allConnections), msg)
-	}
-	for _, con := range allConnections {
+	go func() {
+		defer s.exitWG.Done()
 		var sender string
-		if msg.connection != nil && con.UniqueID() == msg.connection.UniqueID() {
+		if msg.connection != nil && conn.UniqueID() == msg.connection.UniqueID() {
 			sender = ">" // this recipient is the message-sender
+			debugLog.Printf("showing %s their own message: %s\n", msg.connection.GetNickname(), msg.text)
 		} else {
 			sender = fmt.Sprintf("%s:", msg.connection.nickname)
+			debugLog.Printf("sending %s a message from %s: %s\n", conn.GetNickname(), msg.connection.GetNickname(), msg.text)
 		}
-		_, err := fmt.Fprintf(con, "%s %s\n", sender, msg.text)
+		_, err := fmt.Fprintf(conn, "%s %s\n", sender, msg.text)
 		if err != nil {
-			debugLog.Printf("error writing to %v: %v", con.netConn, err)
-			s.removeConnCh <- con
-			continue
+			debugLog.Printf("error writing to %v: %v", conn.netConn, err)
+			debugLog.Printf("removing the errored connection: %v\n", conn.UniqueID())
+			s.removeConnCh <- conn
+			return
 		}
-		if finalBroadcast {
-			debugLog.Printf("disconnecting connection %s", con.UniqueID())
-			s.removeConnCh <- con
+		if s.shuttingDown {
+			debugLog.Printf("removing connection after sending message, as we are shutting down: %s\n", conn.UniqueID())
+			s.removeConnCh <- conn
 		}
-	}
+	}()
 }
 
 // processCommands handles the specified string as a chat-server command. If
@@ -292,8 +294,8 @@ func processCommands(input string, con *connection) (clientIsLeaving bool) {
 		return true
 	case "nickname", "nick":
 		if len(fields) > 1 && fields[1] != "" {
-			debugLog.Printf("changing nickname from %q to %q", con.Nickname(), fields[1])
-			fmt.Fprintf(con, "You are now known as %q instead of %q\n", fields[1], con.Nickname())
+			debugLog.Printf("changing nickname from %q to %q", con.GetNickname(), fields[1])
+			fmt.Fprintf(con, "You are now known as %q instead of %q\n", fields[1], con.GetNickname())
 			con.nickname = fields[1]
 		}
 	case "help":
