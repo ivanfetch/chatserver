@@ -8,13 +8,13 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
 	"strings"
 	"sync"
-	"syscall"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -99,11 +99,12 @@ func (m message) String() string {
 // channels used by goroutines.
 type Server struct {
 	listener                net.Listener
-	stopCh                  <-chan struct{}
 	addConnCh, removeConnCh chan *connection
 	addMessageCh            chan message
-	shuttingDown            bool // cleanup / shutdown is in-process, do not accept new connections or messages.
+	openForBusiness         context.Context    // Still accepting connections and messages, not shutting down
+	stopReceivingSignals    context.CancelFunc // Stop receiving notifications for OS signals
 	exitWG                  *sync.WaitGroup
+	shuttingDown            bool // cleanup / shutdown is in-process, do not accept new connections or messages.
 }
 
 // NewServer returns a type Server.
@@ -114,18 +115,19 @@ func NewServer() (*Server, error) {
 		return nil, fmt.Errorf("cannot listen on %s: %v", listenAddress, err)
 	}
 	debugLog.Printf("listening for connections on %s", listenAddress)
-	stopCh := createSignalHandler()
+	openForBusiness, stopReceivingSignals := signal.NotifyContext(context.Background(), os.Interrupt)
 	addConnCh := make(chan *connection)
 	removeConnCh := make(chan *connection)
 	addMessageCh := make(chan message)
 	exitWG := &sync.WaitGroup{}
 	return &Server{
-		listener:     listener,
-		stopCh:       stopCh,
-		addConnCh:    addConnCh,
-		removeConnCh: removeConnCh,
-		addMessageCh: addMessageCh,
-		exitWG:       exitWG,
+		listener:             listener,
+		openForBusiness:      openForBusiness,
+		stopReceivingSignals: stopReceivingSignals,
+		addConnCh:            addConnCh,
+		removeConnCh:         removeConnCh,
+		addMessageCh:         addMessageCh,
+		exitWG:               exitWG,
 	}, nil
 }
 
@@ -135,38 +137,35 @@ var debugLog *log.Logger = log.New()
 // chat server, and adds them to the connection-manager. A goroutine is also
 // spawned to process any input from the connection.
 func (s *Server) startConnectionAccepter() {
-	debugLog.Println("starting connection accepter")
+	s.exitWG.Add(1)
 	go func() {
-		s.exitWG.Add(1)
+		debugLog.Println("starting connection accepter")
 		defer s.exitWG.Done()
-		for {
-			select {
-			case <-s.stopCh:
-				debugLog.Println("no longer accepting connections")
-				return
-			default:
-				netConn, err := s.listener.Accept()
-				if err != nil {
-					debugLog.Printf("while accepting a connection: %v", err)
-					continue
-				}
-				debugLog.Printf("accepted connection from %s", netConn.RemoteAddr())
-				conn := newConnection(netConn)
-				s.addConnCh <- conn
-				go s.processInput(conn)
+		for !s.shuttingDown {
+			netConn, err := s.listener.Accept()
+			if s.shuttingDown && err != nil {
+				break // Ignore Accept() errors while shutting down, the listener was likely closed by us.
 			}
+			if err != nil {
+				debugLog.Printf("while accepting a connection: %v", err)
+				continue
+			}
+			debugLog.Printf("accepted connection from %s", netConn.RemoteAddr())
+			conn := newConnection(netConn)
+			s.addConnCh <- conn
+			go s.processInput(conn)
 		}
+		debugLog.Println("connection accepter exiting")
 	}()
 }
 
 // startConnectionAndMessageManager runs a goroutine that tracks connections to the chat
 // server, and broadcasts chat messages to all connections.
 func (s *Server) startConnectionAndMessageManager() {
-	debugLog.Println("starting connection manager")
 	var currentConnections []*connection
-	var alreadyCleaningUp bool // Indicates goroutines are in the process of cleaning up, to exit
+	s.exitWG.Add(1)
 	go func() {
-		s.exitWG.Add(1)
+		debugLog.Println("starting connection manager")
 		defer s.exitWG.Done()
 		for {
 			select {
@@ -190,11 +189,12 @@ func (s *Server) startConnectionAndMessageManager() {
 			case newMessage := <-s.addMessageCh:
 				debugLog.Printf("broadcasting a new message from %s: %s", newMessage.connection.Nickname(), newMessage.text)
 				go s.broadcast(newMessage, currentConnections, false)
-			case <-s.stopCh:
-				if !alreadyCleaningUp {
+			case <-s.openForBusiness.Done():
+				if !s.shuttingDown {
 					debugLog.Printf("the connection manager is starting clean up")
-					alreadyCleaningUp = true
-					s.listener.Close()
+					s.shuttingDown = true
+					s.stopReceivingSignals()
+					s.listener.Close() // will unblock listener.Accept()
 					go s.broadcast(message{
 						text:       "You are being disconnected because the chat-server is exiting. So long...",
 						connection: &connection{nickname: "system"},
@@ -203,12 +203,9 @@ func (s *Server) startConnectionAndMessageManager() {
 			default:
 				// Avoid blocking thecontaining loop
 			}
-			if alreadyCleaningUp && len(currentConnections) == 0 {
+			if s.shuttingDown && len(currentConnections) == 0 {
 				break
 			}
-		}
-		if alreadyCleaningUp {
-			debugLog.Printf("the connection manager has finished cleaning up")
 		}
 		debugLog.Println("connection manager exiting")
 	}()
@@ -308,24 +305,6 @@ func processCommands(input string, con *connection) (clientIsLeaving bool) {
 		fmt.Fprintf(con, "%q is an invalid command, please use /help for a list of commands.\n", fields[0])
 	}
 	return false
-}
-
-// createSignalHandler returns a channel that will be closed when SIGTERM
-// and SIGINT signals are received by a goroutine.
-// When the returned channel is readable, it means goroutines should start cleaning
-// up, then exit.
-func createSignalHandler() (stopChannel <-chan struct{}) {
-	stop := make(chan struct{})
-	// Create another channel that receives SIGTERM and SIGINT signals and
-	// closes the above channel.
-	ch := make(chan os.Signal, 2)
-	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		sig := <-ch
-		debugLog.Printf("received signal %s, triggering cleanup and exit...\n", sig)
-		close(stop)
-	}()
-	return stop
 }
 
 // WaitForExit waits for the chat server goroutines to finiss.
