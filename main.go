@@ -200,42 +200,16 @@ func (s *Server) startConnectionAndMessageManager() {
 				debugLog.Printf("adding connection from %s", newConn.UniqueID())
 				currentConnections = append(currentConnections, newConn)
 			case removeConn := <-s.removeConnCh:
-				if removeConn != nil {
-					debugLog.Printf("closing and removing connection %s", removeConn.UniqueID())
-					newConnections := make([]*connection, len(currentConnections)-1)
-					newI := 0
-					for _, conn := range currentConnections {
-						if conn.UniqueID() != removeConn.UniqueID() {
-							newConnections[newI] = conn
-							newI++
-						}
-					}
-					currentConnections = newConnections
-					removeConn.Close()
-				}
+				debugLog.Printf("removing connection %s", removeConn.UniqueID())
+				currentConnections = removeConnection(currentConnections, removeConn)
+				removeConn.Close()
 			case newMessage := <-s.addMessageCh:
 				debugLog.Printf("broadcasting a new message from %s to %d connections: %s", newMessage.connection.GetNickname(), len(currentConnections), newMessage.text)
 				for _, conn := range currentConnections {
 					s.send(newMessage, conn)
 				}
 			case <-s.openForBusiness.Done():
-				if !s.shuttingDown {
-					debugLog.Println("signal received - the connection manager is starting clean up")
-					s.shuttingDown = true
-					s.stopReceivingSignals()
-					s.listener.Close() // will unblock listener.Accept()
-					if len(currentConnections) > 0 {
-						debugLog.Println("adding a system message about the chat server shutting down")
-						go func() { // Avoid blocking when assigning to a channel read within the same select
-							/*
-							   s.addMessageCh <- message{
-							   								text:       "You are being disconnected because the chat-server is exiting. So long...",
-							   								connection: &connection{nickname: "system"},
-							   							}
-							*/
-						}()
-					}
-				}
+				s.initiateShutdown()
 			default:
 				// Avoid blocking thecontaining loop
 			}
@@ -313,6 +287,31 @@ func (s *Server) send(msg message, conn *connection) {
 	}()
 }
 
+// sendSystemMessage spawns a goroutine to submit the specified text as a chat
+// message, from a "system" connection.
+func (s *Server) sendSystemMessage(messageText string) {
+	s.exitWG.Add(1)
+	go func() {
+		defer s.exitWG.Done()
+		debugLog.Printf("sending a system message: %s\n", messageText)
+		s.addMessageCh <- message{
+			text:       messageText,
+			connection: &connection{nickname: "system"},
+		}
+	}()
+}
+
+// shutdown starts shutting down goroutines for the chat server.
+func (s *Server) initiateShutdown() {
+	if !s.shuttingDown {
+		debugLog.Println("starting chat server clean up. . .")
+		s.shuttingDown = true
+		s.stopReceivingSignals()
+		s.listener.Close() // will unblock listener.Accept()
+		s.sendSystemMessage("the chat server is shutting down - you are being disconnected")
+	}
+}
+
 // processCommands handles the specified string as a chat-server command. If
 // the command would cause this connection to exit, clientIsLeaving will be
 // set to true.
@@ -346,6 +345,22 @@ func (s *Server) WaitForExit() {
 	s.exitWG.Wait()
 	debugLog.Println("all cleanup is done, program exiting")
 }
+
+func removeConnection(currentConnections []*connection, toRemove *connection) []*connection {
+	if toRemove == nil {
+		return currentConnections
+	}
+	newConnections := make([]*connection, len(currentConnections)-1)
+	newI := 0
+	for _, conn := range currentConnections {
+		if conn.UniqueID() != toRemove.UniqueID() {
+			newConnections[newI] = conn
+			newI++
+		}
+	}
+	return newConnections
+}
+
 func main() {
 	debugLog.SetFormatter(&log.TextFormatter{
 		PadLevelText: true,
