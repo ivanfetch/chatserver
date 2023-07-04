@@ -1,4 +1,4 @@
-package main
+package chatserver
 
 // This multi-user chat server helps me learn concurrency.
 // This is a learning project, please don't count on it improving, or even
@@ -361,16 +361,16 @@ func removeConnection(currentConnections []*connection, toRemove *connection) []
 	return newConnections
 }
 
-func main() {
+func Run() error {
 	debugLog.SetFormatter(&log.TextFormatter{
 		PadLevelText: true,
 	})
 	server, err := NewServer()
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		return err
 	}
 	server.startConnectionAccepter()
 	server.startConnectionAndMessageManager()
 	server.WaitForExit()
+	return nil
 }

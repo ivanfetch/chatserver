@@ -1,4 +1,4 @@
-module github.com/ivanfetch/chat-server
+module github.com/ivanfetch/chatserver
 
 go 1.20
 
