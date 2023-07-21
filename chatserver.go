@@ -22,15 +22,20 @@ import (
 
 // connection holds information about a connection to the chat server.
 type connection struct {
-	netConn  net.Conn // TCP connection
-	isClosed bool     // if netConn has been closed by us
-	nickname string   // optional nickname, accompanying chat messages
+	netConn          net.Conn // TCP connection
+	isClosed         bool     // if netConn has been closed by us
+	nickname         string   // optional nickname, accompanying chat messages
+	receiveMessageCh chan *message
+	server           *Server
 }
 
 // newConnection accepts a net.Conn and returns a type connection.
-func newConnection(netConn net.Conn) *connection {
+func (s *Server) newConnection(netConn net.Conn) *connection {
+	receiveMessageCh := make(chan *message)
 	return &connection{
-		netConn: netConn,
+		netConn:          netConn,
+		receiveMessageCh: receiveMessageCh,
+		server:           s,
 	}
 }
 
@@ -83,6 +88,44 @@ func (c connection) GetNickname() string {
 		return c.nickname
 	}
 	return c.netConn.RemoteAddr().String()
+}
+
+// receiveMessages accepts type message via connection.receiveMessageCh, and
+// writes them to connection.netConn.
+func (c *connection) processReceivedMessages() {
+	c.server.exitWG.Add(1)
+	defer c.server.exitWG.Done()
+	debugLog.Printf("starting processing of messages received by connection %s\n", c.UniqueID())
+	for {
+		select {
+		default:
+			if c.isClosed {
+				debugLog.Printf("exiting processing of messages received by connection %s\n", c.UniqueID())
+				return
+			}
+		case newMessage := <-c.receiveMessageCh:
+			var sender string
+			if newMessage.connection != nil && c.UniqueID() == newMessage.connection.UniqueID() {
+				sender = ">" // this recipient is the message-sender
+				debugLog.Printf("showing %s their own message: %s\n", newMessage.connection.GetNickname(), newMessage.text)
+			} else {
+				sender = fmt.Sprintf("%s:", newMessage.connection.nickname)
+				debugLog.Printf("sending %s a message from %s: %s\n", c.GetNickname(), newMessage.connection.GetNickname(), newMessage.text)
+			}
+			_, err := fmt.Fprintf(c.netConn, "%s %s\n", sender, newMessage.text)
+			if err != nil {
+				debugLog.Printf("error writing to %v: %v", c.netConn, err)
+				debugLog.Printf("removing the errored connection: %v\n", c.UniqueID())
+				c.server.removeConnCh <- c
+				return
+			}
+			if c.server.shuttingDown {
+				debugLog.Printf("removing connection after sending message, as we are shutting down: %s\n", c.UniqueID())
+				c.server.removeConnCh <- c
+			}
+		}
+	}
+
 }
 
 // message represents a message sent by a chat connection.
@@ -184,9 +227,10 @@ func (s *Server) startConnectionAccepter() {
 				continue
 			}
 			debugLog.Printf("accepted connection from %s", netConn.RemoteAddr())
-			conn := newConnection(netConn)
+			conn := s.newConnection(netConn)
 			s.addConnCh <- conn
-			go s.processInput(conn)
+			go conn.processInput()
+			go conn.processReceivedMessages()
 		}
 		debugLog.Println("connection accepter exiting")
 	}()
@@ -230,39 +274,39 @@ func (s *Server) startConnectionAndMessageManager() {
 
 // processInput scans a chat connection for text, and hands chat commands or
 // messages.
-func (s *Server) processInput(con *connection) {
-	s.exitWG.Add(1)
-	defer s.exitWG.Done()
-	debugLog.Printf("saying hello then reading input from connection %s", con.UniqueID())
-	fmt.Fprintln(con, `Well hello there!
+func (c *connection) processInput() {
+	c.server.exitWG.Add(1)
+	defer c.server.exitWG.Done()
+	debugLog.Printf("saying hello then reading input from connection %s", c.UniqueID())
+	fmt.Fprintln(c, `Well hello there!
 
 Anything you type will be sent to all other users of this chat server.
 A line that begins with a slash (/) is considered a command - enter /help for a list of valid commands. `)
-	scanner := bufio.NewScanner(con)
+	scanner := bufio.NewScanner(c)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			continue
 		}
-		debugLog.Printf("received from %s: %s", con.UniqueID(), line)
+		debugLog.Printf("received from %s: %s", c.UniqueID(), line)
 		if strings.HasPrefix(line, "/") {
-			exiting := processCommands(line, con)
+			exiting := processCommands(line, c)
 			if exiting {
-				s.removeConnCh <- con
+				c.server.removeConnCh <- c
 				return
 			}
 			continue
 		}
-		s.addMessageCh <- message{
+		c.server.addMessageCh <- message{
 			text:       line,
-			connection: con,
+			connection: c,
 		}
 	}
 	err := scanner.Err()
-	if !con.isClosed && err != nil {
-		debugLog.Printf("while reading from %s: %v", con.UniqueID(), err)
+	if !c.isClosed && err != nil {
+		debugLog.Printf("while reading from %s: %v", c.UniqueID(), err)
 	}
-	debugLog.Printf("input processing is exiting for connection %s", con.UniqueID())
+	debugLog.Printf("input processing is exiting for connection %s", c.UniqueID())
 }
 
 // send spawns a goroutine to write the specified message to the specified
@@ -271,25 +315,7 @@ func (s *Server) send(msg message, conn *connection) {
 	s.exitWG.Add(1)
 	go func() {
 		defer s.exitWG.Done()
-		var sender string
-		if msg.connection != nil && conn.UniqueID() == msg.connection.UniqueID() {
-			sender = ">" // this recipient is the message-sender
-			debugLog.Printf("showing %s their own message: %s\n", msg.connection.GetNickname(), msg.text)
-		} else {
-			sender = fmt.Sprintf("%s:", msg.connection.nickname)
-			debugLog.Printf("sending %s a message from %s: %s\n", conn.GetNickname(), msg.connection.GetNickname(), msg.text)
-		}
-		_, err := fmt.Fprintf(conn, "%s %s\n", sender, msg.text)
-		if err != nil {
-			debugLog.Printf("error writing to %v: %v", conn.netConn, err)
-			debugLog.Printf("removing the errored connection: %v\n", conn.UniqueID())
-			s.removeConnCh <- conn
-			return
-		}
-		if s.shuttingDown {
-			debugLog.Printf("removing connection after sending message, as we are shutting down: %s\n", conn.UniqueID())
-			s.removeConnCh <- conn
-		}
+		conn.receiveMessageCh <- &msg
 	}()
 }
 
