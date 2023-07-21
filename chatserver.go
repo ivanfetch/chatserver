@@ -125,7 +125,6 @@ func (c *connection) processReceivedMessages() {
 			}
 		}
 	}
-
 }
 
 // message represents a message sent by a chat connection.
@@ -259,12 +258,11 @@ func (s *Server) startConnectionAndMessageManager() {
 					s.send(newMessage, conn)
 				}
 			case <-s.openForBusiness.Done():
-				s.InitiateShutdown()
+				s.InitiateShutdown(len(currentConnections) > 0)
 			default:
 				// Avoid blocking thecontaining loop
 			}
 			if s.shuttingDown && len(currentConnections) == 0 {
-				s.closeChannels()
 				break
 			}
 		}
@@ -333,21 +331,16 @@ func (s *Server) sendSystemMessage(messageText string) {
 	}()
 }
 
-// closeChannels closes the communication channels for adding/removing
-// connections and accepting new chat messages.
-func (s *Server) closeChannels() {
-	close(s.addConnCh)
-	close(s.removeConnCh)
-	close(s.addMessageCh)
-}
-
 // InitiateShutdown starts shutting down goroutines for the chat server.
-func (s *Server) InitiateShutdown() {
+func (s *Server) InitiateShutdown(thereAreConnections bool) {
 	if !s.shuttingDown {
 		debugLog.Println("starting chat server clean up. . .")
 		s.shuttingDown = true
 		s.stopReceivingSignals()
-		s.sendSystemMessage("the chat server is shutting down - goodbye!")
+		if thereAreConnections {
+			s.sendSystemMessage("the chat server is shutting down - goodbye!")
+		}
+
 		s.listener.Close() // will unblock listener.Accept()
 	}
 }
