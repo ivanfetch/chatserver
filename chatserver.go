@@ -158,6 +158,12 @@ func NewServer(options ...ServerOption) (*Server, error) {
 	return s, nil
 }
 
+// GetListenAddress returns the listen address of the chat server, of the form
+// host:port or :port.
+func (s Server) GetListenAddress() string {
+	return s.listenAddress
+}
+
 var debugLog *log.Logger = log.New()
 
 // startConnectionAccepter runs a goroutine that accepts connections to the
@@ -209,11 +215,12 @@ func (s *Server) startConnectionAndMessageManager() {
 					s.send(newMessage, conn)
 				}
 			case <-s.openForBusiness.Done():
-				s.initiateShutdown()
+				s.InitiateShutdown()
 			default:
 				// Avoid blocking thecontaining loop
 			}
 			if s.shuttingDown && len(currentConnections) == 0 {
+				s.closeChannels()
 				break
 			}
 		}
@@ -230,8 +237,7 @@ func (s *Server) processInput(con *connection) {
 	fmt.Fprintln(con, `Well hello there!
 
 Anything you type will be sent to all other users of this chat server.
-A line that begins with a slash (/) is considered a command - enter /help for a list of valid commands.
-`)
+A line that begins with a slash (/) is considered a command - enter /help for a list of valid commands. `)
 	scanner := bufio.NewScanner(con)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -301,14 +307,22 @@ func (s *Server) sendSystemMessage(messageText string) {
 	}()
 }
 
-// shutdown starts shutting down goroutines for the chat server.
-func (s *Server) initiateShutdown() {
+// closeChannels closes the communication channels for adding/removing
+// connections and accepting new chat messages.
+func (s *Server) closeChannels() {
+	close(s.addConnCh)
+	close(s.removeConnCh)
+	close(s.addMessageCh)
+}
+
+// InitiateShutdown starts shutting down goroutines for the chat server.
+func (s *Server) InitiateShutdown() {
 	if !s.shuttingDown {
 		debugLog.Println("starting chat server clean up. . .")
 		s.shuttingDown = true
 		s.stopReceivingSignals()
+		s.sendSystemMessage("the chat server is shutting down - goodbye!")
 		s.listener.Close() // will unblock listener.Accept()
-		s.sendSystemMessage("the chat server is shutting down - you are being disconnected")
 	}
 }
 
@@ -361,16 +375,24 @@ func removeConnection(currentConnections []*connection, toRemove *connection) []
 	return newConnections
 }
 
-func Run() error {
+func RunWithoutWaitingForExit() (*Server, error) {
 	debugLog.SetFormatter(&log.TextFormatter{
 		PadLevelText: true,
 	})
 	server, err := NewServer()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	server.startConnectionAccepter()
 	server.startConnectionAndMessageManager()
+	return server, nil
+}
+
+func Run() error {
+	server, err := RunWithoutWaitingForExit()
+	if err != nil {
+		return err
+	}
 	server.WaitForExit()
 	return nil
 }
