@@ -149,6 +149,7 @@ type Server struct {
 	stopReceivingSignals    context.CancelFunc // Stop receiving notifications for OS signals
 	exitWG                  *sync.WaitGroup
 	shuttingDown            bool // cleanup / shutdown is in-process, do not accept new connections or messages.
+	hasExited               bool // true if all go routines have cleaned up
 }
 
 // ServerOption uses a function  to set fields on a type Server by operating on
@@ -345,6 +346,12 @@ func (s *Server) InitiateShutdown(thereAreConnections bool) {
 	}
 }
 
+// HasExited returns true if the chat-server goroutines have all finished and
+// exited.
+func (s *Server) HasExited() bool {
+	return s.hasExited
+}
+
 // processCommands handles the specified string as a chat-server command. If
 // the command would cause this connection to exit, clientIsLeaving will be
 // set to true.
@@ -372,10 +379,11 @@ func processCommands(input string, con *connection) (clientIsLeaving bool) {
 	return false
 }
 
-// WaitForExit waits for the chat server goroutines to finiss.
+// WaitForExit waits for the chat server goroutines to finish.
 func (s *Server) WaitForExit() {
 	debugLog.Println("waiting for go routines. . .")
 	s.exitWG.Wait()
+	s.hasExited = true
 	debugLog.Println("all cleanup is done, program exiting")
 }
 
@@ -394,24 +402,20 @@ func removeConnection(currentConnections []*connection, toRemove *connection) []
 	return newConnections
 }
 
-func RunWithoutWaitingForExit() (*Server, error) {
+func (s *Server) Run() {
 	debugLog.SetFormatter(&log.TextFormatter{
 		PadLevelText: true,
 	})
-	server, err := NewServer()
-	if err != nil {
-		return nil, err
-	}
-	server.startConnectionAccepter()
-	server.startConnectionAndMessageManager()
-	return server, nil
+	s.startConnectionAccepter()
+	s.startConnectionAndMessageManager()
 }
 
-func Run() error {
-	server, err := RunWithoutWaitingForExit()
+func CreateAndRun() error {
+	server, err := NewServer()
 	if err != nil {
 		return err
 	}
+	server.Run()
 	server.WaitForExit()
 	return nil
 }
