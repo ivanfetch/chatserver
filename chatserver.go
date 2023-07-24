@@ -11,13 +11,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/signal"
 	"strings"
 	"sync"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 )
 
 // connection holds information about a connection to the chat server.
@@ -41,7 +42,7 @@ func (s *Server) newConnection(netConn net.Conn) *connection {
 // Close wraps the Close method of the member net.Conn type and registers that
 // this type connection is closed for the Read and Write receivers.
 func (c *connection) Close() {
-	debugLog.Printf("closing connection %s", c.UniqueID())
+	c.server.log.Debugf("closing connection %s", c.UniqueID())
 	c.isClosed = true
 	c.netConn.Close()
 }
@@ -49,7 +50,7 @@ func (c *connection) Close() {
 // Read wraps netCOnn.Read, only reading if isClosed == false
 func (c *connection) Read(b []byte) (int, error) {
 	if c.isClosed {
-		debugLog.Printf("not reading from this closed connection %s\n", c.UniqueID())
+		c.server.log.Debugf("not reading from this closed connection %s\n", c.UniqueID())
 		return 0, nil
 	}
 	return c.netConn.Read(b)
@@ -58,7 +59,7 @@ func (c *connection) Read(b []byte) (int, error) {
 // Write wraps netCOnn.Write, only writing if isClosed == false
 func (c *connection) Write(b []byte) (int, error) {
 	if c.isClosed {
-		debugLog.Printf("not writing to this closed connection %s: %s\n", c.UniqueID(), string(b))
+		c.server.log.Debugf("not writing to this closed connection %s: %s\n", c.UniqueID(), string(b))
 		return 0, nil
 	}
 	return c.netConn.Write(b)
@@ -100,11 +101,11 @@ func (c *connection) processCommand(input string) (clientIsLeaving bool) {
 	switch strings.ToLower(fields[0][1:]) { // first word minus its first character(/)
 	case "quit", "exit", "leave":
 		fmt.Fprintf(c, "You're leaving? Ok - have a nice day. :)\n")
-		debugLog.Printf("client %s has signed off", c.UniqueID())
+		c.server.log.Debugf("client %s has signed off", c.UniqueID())
 		return true
 	case "nickname", "nick":
 		if len(fields) > 1 && fields[1] != "" {
-			debugLog.Printf("changing nickname from %q to %q", c.GetNickname(), fields[1])
+			c.server.log.Debugf("changing nickname from %q to %q", c.GetNickname(), fields[1])
 			c.server.sendSystemMessage(fmt.Sprintf("%q is now known as %q", c.GetNickname(), fields[1]))
 			c.nickname = fields[1]
 		}
@@ -125,7 +126,7 @@ func (c *connection) processCommand(input string) (clientIsLeaving bool) {
 func (c *connection) processInput() {
 	c.server.exitWG.Add(1)
 	defer c.server.exitWG.Done()
-	debugLog.Printf("saying hello then reading input from connection %s", c.UniqueID())
+	c.server.log.Debugf("saying hello then reading input from connection %s", c.UniqueID())
 	fmt.Fprintln(c, `Well hello there!
 
 Anything you type will be sent to all other users of this chat server.
@@ -136,7 +137,7 @@ A line that begins with a slash (/) is considered a command - enter /help for a 
 		if line == "" {
 			continue
 		}
-		debugLog.Printf("received from %s: %s", c.UniqueID(), line)
+		c.server.log.Debugf("received from %s: %s", c.UniqueID(), line)
 		if strings.HasPrefix(line, "/") {
 			exiting := c.processCommand(line)
 			if exiting {
@@ -152,9 +153,9 @@ A line that begins with a slash (/) is considered a command - enter /help for a 
 	}
 	err := scanner.Err()
 	if !c.isClosed && err != nil {
-		debugLog.Printf("while reading from %s: %v", c.UniqueID(), err)
+		c.server.log.Debugf("while reading from %s: %v", c.UniqueID(), err)
 	}
-	debugLog.Printf("input processing is exiting for connection %s", c.UniqueID())
+	c.server.log.Debugf("input processing is exiting for connection %s", c.UniqueID())
 }
 
 // receiveMessages starts a goroutine that accepts a message type via the
@@ -164,32 +165,32 @@ A line that begins with a slash (/) is considered a command - enter /help for a 
 func (c *connection) processReceivedMessages() {
 	c.server.exitWG.Add(1)
 	defer c.server.exitWG.Done()
-	debugLog.Printf("starting processing of messages received by connection %s\n", c.UniqueID())
+	c.server.log.Debugf("starting processing of messages received by connection %s\n", c.UniqueID())
 	for {
 		select {
 		default:
 			if c.isClosed {
-				debugLog.Printf("exiting processing of messages received by connection %s\n", c.UniqueID())
+				c.server.log.Debugf("exiting processing of messages received by connection %s\n", c.UniqueID())
 				return
 			}
 		case newMessage := <-c.receiveMessageCh:
 			var sender string
 			if newMessage.connection != nil && c.UniqueID() == newMessage.connection.UniqueID() {
 				sender = ">" // this recipient is the message-sender
-				debugLog.Printf("showing %s their own message: %s\n", newMessage.connection.GetNickname(), newMessage.text)
+				c.server.log.Debugf("showing %s their own message: %s\n", newMessage.connection.GetNickname(), newMessage.text)
 			} else {
 				sender = fmt.Sprintf("%s>", newMessage.connection.nickname)
-				debugLog.Printf("sending %s a message from %s: %s\n", c.GetNickname(), newMessage.connection.GetNickname(), newMessage.text)
+				c.server.log.Debugf("sending %s a message from %s: %s\n", c.GetNickname(), newMessage.connection.GetNickname(), newMessage.text)
 			}
 			_, err := fmt.Fprintf(c.netConn, "%s %s\n", sender, newMessage.text)
 			if err != nil {
-				debugLog.Printf("error writing to %v: %v", c.UniqueID(), err)
-				debugLog.Printf("removing the errored connection: %v\n", c.UniqueID())
+				c.server.log.Debugf("error writing to %v: %v", c.UniqueID(), err)
+				c.server.log.Debugf("removing the errored connection: %v\n", c.UniqueID())
 				c.server.removeConnCh <- c
 				return
 			}
 			if c.server.shuttingDown {
-				debugLog.Printf("removing connection since the chat server is shutting down: %s\n", c.UniqueID())
+				c.server.log.Debugf("removing connection since the chat server is shutting down: %s\n", c.UniqueID())
 				c.server.removeConnCh <- c
 			}
 		}
@@ -207,6 +208,7 @@ type message struct {
 type Server struct {
 	listenAddress           string // host:port or :port
 	listener                net.Listener
+	log                     *logrus.Logger
 	addConnCh, removeConnCh chan *connection
 	addMessageCh            chan message
 	openForBusiness         context.Context    // Still accepting connections and messages, not shutting down
@@ -223,13 +225,36 @@ type Server struct {
 // the constructor.
 type ServerOption func(*Server) error
 
-// WithListenAddress sets the corresponding field in a Server type.
+// WithListenAddress sets the corresponding field in a type Server.
 func WithListenAddress(l string) ServerOption {
 	return func(s *Server) error {
 		if l == "" || !strings.Contains(l, ":") {
 			return errors.New("please specify the listen address as host:port or :port")
 		}
 		s.listenAddress = l
+		return nil
+	}
+}
+
+// WithDebugLogging outputs debug logs to standard error. By default, minimal
+// informative log messages are output.
+func WithDebugLogging() ServerOption {
+	return func(s *Server) error {
+		if s.log == nil {
+			s.createLog()
+		}
+		s.log.SetLevel(logrus.DebugLevel)
+		return nil
+	}
+}
+
+// WithLogWriter sets the io.Writer where log output is written.
+func WithLogWriter(w io.Writer) ServerOption {
+	return func(s *Server) error {
+		if s.log == nil {
+			s.createLog()
+		}
+		s.log.SetOutput(w)
 		return nil
 	}
 }
@@ -248,6 +273,7 @@ func NewServer(options ...ServerOption) (*Server, error) {
 		addMessageCh:         make(chan message),
 		exitWG:               &sync.WaitGroup{},
 	}
+	s.createLog()
 	for _, option := range options {
 		err := option(s)
 		if err != nil {
@@ -257,13 +283,22 @@ func NewServer(options ...ServerOption) (*Server, error) {
 	return s, nil
 }
 
+// createLog configures the logger, which only outputs info level messages by
+// default.
+func (s *Server) createLog() {
+	var log *logrus.Logger = logrus.New()
+	// Output relative time offsets instead of full timestamps.
+	log.SetFormatter(&logrus.TextFormatter{
+		PadLevelText: true,
+	})
+	s.log = log
+}
+
 // GetListenAddress returns the listen address of the chat server, of the form
 // host:port or :port.
 func (s Server) GetListenAddress() string {
 	return s.listenAddress
 }
-
-var debugLog *log.Logger = log.New()
 
 // startConnectionAccepter starts a goroutine that accepts connections to the
 // chat server, and adds them to the connection-and-message-manager.
@@ -272,7 +307,7 @@ var debugLog *log.Logger = log.New()
 func (s *Server) startConnectionAccepter() {
 	s.exitWG.Add(1)
 	go func() {
-		debugLog.Println("starting connection accepter")
+		s.log.Debugln("starting connection accepter")
 		defer s.exitWG.Done()
 		for !s.shuttingDown {
 			netConn, err := s.listener.Accept()
@@ -280,16 +315,16 @@ func (s *Server) startConnectionAccepter() {
 				break // Ignore Accept() errors while shutting down, the listener was likely closed by us.
 			}
 			if err != nil {
-				debugLog.Printf("while accepting a connection: %v", err)
+				s.log.Debugf("while accepting a connection: %v", err)
 				continue
 			}
-			debugLog.Printf("accepted connection from %s", netConn.RemoteAddr())
+			s.log.Debugf("accepted connection from %s", netConn.RemoteAddr())
 			conn := s.newConnection(netConn)
 			s.addConnCh <- conn
 			go conn.processInput()
 			go conn.processReceivedMessages()
 		}
-		debugLog.Println("connection accepter exiting")
+		s.log.Debugln("connection accepter exiting")
 	}()
 }
 
@@ -299,19 +334,19 @@ func (s *Server) startConnectionAndMessageManager() {
 	var currentConnections []*connection
 	s.exitWG.Add(1)
 	go func() {
-		debugLog.Println("starting connection manager")
+		s.log.Debugln("starting connection manager")
 		defer s.exitWG.Done()
 		for {
 			select {
 			case <-s.openForBusiness.Done():
 				s.InitiateShutdown()
 			case newConn := <-s.addConnCh:
-				debugLog.Printf("adding connection from %s", newConn.UniqueID())
+				s.log.Debugf("adding connection from %s", newConn.UniqueID())
 				currentConnections = append(currentConnections, newConn)
 				s.sendSystemMessage(fmt.Sprintf("%s has joined the chat", newConn.GetNickname()))
 				s.numConnections = len(currentConnections)
 			case removeConn := <-s.removeConnCh:
-				debugLog.Printf("removing connection %s", removeConn.UniqueID())
+				s.log.Debugf("removing connection %s", removeConn.UniqueID())
 				currentConnections = removeConnection(currentConnections, removeConn)
 				removeConn.Close()
 				if !s.shuttingDown { // Avoid writes to a blocking channel if we're trying to clean up
@@ -319,7 +354,7 @@ func (s *Server) startConnectionAndMessageManager() {
 				}
 				s.numConnections = len(currentConnections)
 			case newMessage := <-s.addMessageCh:
-				debugLog.Printf("broadcasting a new message from %s to %d connections: %s", newMessage.connection.GetNickname(), len(currentConnections), newMessage.text)
+				s.log.Debugf("broadcasting a new message from %s to %d connections: %s", newMessage.connection.GetNickname(), len(currentConnections), newMessage.text)
 				for _, conn := range currentConnections {
 					s.send(newMessage, conn)
 				}
@@ -330,7 +365,7 @@ func (s *Server) startConnectionAndMessageManager() {
 				break
 			}
 		}
-		debugLog.Println("connection manager exiting")
+		s.log.Debugln("connection manager exiting")
 	}()
 }
 
@@ -369,7 +404,7 @@ func (s *Server) sendSystemMessage(messageText string) {
 	s.exitWG.Add(1)
 	go func() {
 		defer s.exitWG.Done()
-		debugLog.Printf("sending a system message: %s\n", messageText)
+		s.log.Debugf("sending a system message: %s\n", messageText)
 		s.addMessageCh <- message{
 			text:       messageText,
 			connection: &connection{nickname: "-"},
@@ -380,7 +415,7 @@ func (s *Server) sendSystemMessage(messageText string) {
 // InitiateShutdown starts shutting down goroutines for the chat server.
 func (s *Server) InitiateShutdown() {
 	if !s.shuttingDown {
-		debugLog.Println("starting chat server clean up. . .")
+		s.log.Infoln("starting chat server shutdown. . .")
 		s.shuttingDown = true
 		s.stopReceivingSignals()
 		if s.numConnections > 0 {
@@ -399,24 +434,21 @@ func (s *Server) HasExited() bool {
 
 // WaitForExit waits for the chat server goroutines to finish.
 func (s *Server) WaitForExit() {
-	debugLog.Println("waiting for go routines. . .")
+	s.log.Debugln("waiting for go routines. . .")
 	s.exitWG.Wait()
 	s.hasExited = true
-	debugLog.Println("all cleanup is done")
+	s.log.Debugln("all cleanup is done")
 }
 
 // ListenAndServe begins listening for new connections, and starts the
 // connection-and-message-manager.
 func (s *Server) ListenAndServe() error {
-	debugLog.SetFormatter(&log.TextFormatter{
-		PadLevelText: true,
-	})
 	var err error
 	s.listener, err = net.Listen("tcp", s.listenAddress)
 	if err != nil {
 		return fmt.Errorf("cannot listen on %s: %v", s.listenAddress, err)
 	}
-	debugLog.Printf("listening for connections on %s", s.listenAddress)
+	s.log.Infof("listening for connections on %s", s.listenAddress)
 	s.startConnectionAccepter()
 	s.startConnectionAndMessageManager()
 	return nil

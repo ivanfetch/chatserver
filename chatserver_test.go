@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"os"
 	"strings"
@@ -70,7 +71,13 @@ func TestChatSession(t *testing.T) {
 	timeout := time.NewTimer(5 * time.Second)
 	defer timeout.Stop()
 	t.Log("starting chat server")
-	server, err := chatserver.NewServer()
+	var err error
+	var server *chatserver.Server
+	if testing.Verbose() {
+		server, err = chatserver.NewServer(chatserver.WithDebugLogging())
+	} else {
+		server, err = chatserver.NewServer(chatserver.WithLogWriter(ioutil.Discard)) // discard non-debug status output
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
