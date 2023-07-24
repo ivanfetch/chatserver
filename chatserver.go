@@ -210,6 +210,7 @@ type Server struct {
 	addConnCh, removeConnCh chan *connection
 	addMessageCh            chan message
 	openForBusiness         context.Context    // Still accepting connections and messages, not shutting down
+	numConnections          int                // Populated by the connection and message manager
 	stopReceivingSignals    context.CancelFunc // Stop receiving notifications for OS signals
 	exitWG                  *sync.WaitGroup    // How many goroutines are started?
 	shuttingDown            bool               // cleanup / shutdown is in-process, do not accept new connections or messages.
@@ -303,11 +304,12 @@ func (s *Server) startConnectionAndMessageManager() {
 		for {
 			select {
 			case <-s.openForBusiness.Done():
-				s.InitiateShutdown(len(currentConnections) > 0)
+				s.InitiateShutdown()
 			case newConn := <-s.addConnCh:
 				debugLog.Printf("adding connection from %s", newConn.UniqueID())
 				currentConnections = append(currentConnections, newConn)
 				s.sendSystemMessage(fmt.Sprintf("%s has joined the chat", newConn.GetNickname()))
+				s.numConnections = len(currentConnections)
 			case removeConn := <-s.removeConnCh:
 				debugLog.Printf("removing connection %s", removeConn.UniqueID())
 				currentConnections = removeConnection(currentConnections, removeConn)
@@ -315,6 +317,7 @@ func (s *Server) startConnectionAndMessageManager() {
 				if !s.shuttingDown { // Avoid writes to a blocking channel if we're trying to clean up
 					s.sendSystemMessage(fmt.Sprintf("%s has left the chat", removeConn.GetNickname()))
 				}
+				s.numConnections = len(currentConnections)
 			case newMessage := <-s.addMessageCh:
 				debugLog.Printf("broadcasting a new message from %s to %d connections: %s", newMessage.connection.GetNickname(), len(currentConnections), newMessage.text)
 				for _, conn := range currentConnections {
@@ -375,12 +378,12 @@ func (s *Server) sendSystemMessage(messageText string) {
 }
 
 // InitiateShutdown starts shutting down goroutines for the chat server.
-func (s *Server) InitiateShutdown(thereAreConnections bool) {
+func (s *Server) InitiateShutdown() {
 	if !s.shuttingDown {
 		debugLog.Println("starting chat server clean up. . .")
 		s.shuttingDown = true
 		s.stopReceivingSignals()
-		if thereAreConnections {
+		if s.numConnections > 0 {
 			s.sendSystemMessage("the chat server is shutting down - goodbye!")
 		}
 		s.listener.Close() // will unblock listener.Accept()

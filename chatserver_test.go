@@ -126,7 +126,7 @@ func TestChatSession(t *testing.T) {
 	)
 
 	t.Log("stopping chat server")
-	server.InitiateShutdown(true)
+	server.InitiateShutdown()
 	client1.matchSubstringsOrFailTestWithTimeout(t, "the chat server is shutting down")
 	go server.WaitForExit() // Causes server.HasExited() == true
 	for !server.HasExited() {
