@@ -109,7 +109,7 @@ func (c *connection) processReceivedMessages() {
 				sender = ">" // this recipient is the message-sender
 				debugLog.Printf("showing %s their own message: %s\n", newMessage.connection.GetNickname(), newMessage.text)
 			} else {
-				sender = fmt.Sprintf("%s:", newMessage.connection.nickname)
+				sender = fmt.Sprintf("%s>", newMessage.connection.nickname)
 				debugLog.Printf("sending %s a message from %s: %s\n", c.GetNickname(), newMessage.connection.GetNickname(), newMessage.text)
 			}
 			_, err := fmt.Fprintf(c.netConn, "%s %s\n", sender, newMessage.text)
@@ -135,7 +135,7 @@ type message struct {
 
 // String formats the message sender and text.
 func (m message) String() string {
-	return fmt.Sprintf("%s: %s\n", m.connection.GetNickname(), m.text)
+	return fmt.Sprintf("%s> %s\n", m.connection.GetNickname(), m.text)
 }
 
 // Server holds the TCP listener, configuration, and communication
@@ -249,6 +249,7 @@ func (s *Server) startConnectionAndMessageManager() {
 			case newConn := <-s.addConnCh:
 				debugLog.Printf("adding connection from %s", newConn.UniqueID())
 				currentConnections = append(currentConnections, newConn)
+				s.sendSystemMessage(fmt.Sprintf("%s has joined the chat", newConn.GetNickname()))
 			case removeConn := <-s.removeConnCh:
 				debugLog.Printf("removing connection %s", removeConn.UniqueID())
 				currentConnections = removeConnection(currentConnections, removeConn)
@@ -327,7 +328,7 @@ func (s *Server) sendSystemMessage(messageText string) {
 		debugLog.Printf("sending a system message: %s\n", messageText)
 		s.addMessageCh <- message{
 			text:       messageText,
-			connection: &connection{nickname: "system"},
+			connection: &connection{nickname: "-"},
 		}
 	}()
 }
@@ -359,13 +360,14 @@ func processCommands(input string, con *connection) (clientIsLeaving bool) {
 	fields := strings.Fields(input)
 	switch strings.ToLower(fields[0][1:]) { // first word minus its first character(/)
 	case "quit", "exit", "leave":
+		con.server.sendSystemMessage(fmt.Sprintf("%s has left the chat", con.GetNickname()))
 		fmt.Fprintf(con, "You're leaving? Ok - have a nice day. :)\n")
 		debugLog.Printf("client %s has signed off", con.UniqueID())
 		return true
 	case "nickname", "nick":
 		if len(fields) > 1 && fields[1] != "" {
 			debugLog.Printf("changing nickname from %q to %q", con.GetNickname(), fields[1])
-			fmt.Fprintf(con, "You are now known as %q instead of %q\n", fields[1], con.GetNickname())
+			con.server.sendSystemMessage(fmt.Sprintf("%q is now known as %q", con.GetNickname(), fields[1]))
 			con.nickname = fields[1]
 		}
 	case "help":
