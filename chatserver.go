@@ -1,4 +1,4 @@
-package chatserver
+package chat
 
 // This multi-user chat server helps me learn concurrency.
 // This is a learning project, please don't count on it improving, or even

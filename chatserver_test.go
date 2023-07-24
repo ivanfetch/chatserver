@@ -1,4 +1,4 @@
-package chatserver_test
+package chat_test
 
 import (
 	"bufio"
@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ivanfetch/chatserver"
+	chat "github.com/ivanfetch/chatserver"
 )
 
 type chatClient struct {
@@ -72,11 +72,11 @@ func TestChatSession(t *testing.T) {
 	defer timeout.Stop()
 	t.Log("starting chat server")
 	var err error
-	var server *chatserver.Server
+	var server *chat.Server
 	if testing.Verbose() {
-		server, err = chatserver.NewServer(chatserver.WithDebugLogging())
+		server, err = chat.NewServer(chat.WithDebugLogging())
 	} else {
-		server, err = chatserver.NewServer(chatserver.WithLogWriter(ioutil.Discard)) // discard non-debug status output
+		server, err = chat.NewServer(chat.WithLogWriter(ioutil.Discard)) // discard non-debug status output
 	}
 	if err != nil {
 		t.Fatal(err)
