@@ -13,33 +13,56 @@ import (
 	"github.com/ivanfetch/chatserver"
 )
 
+type chatClient struct {
+	name          string        // differentiate connections for test feedback
+	netConn       *net.Conn     // TCP connection
+	netConnReader *bufio.Reader // to read strings from netConn
+}
+
+func newChatClient(name, connectAddress string) (*chatClient, error) {
+	netConn, err := net.Dial("tcp", connectAddress)
+	if err != nil {
+		return nil, fmt.Errorf("%s %v", name, err)
+	}
+	err = netConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err != nil {
+		return nil, fmt.Errorf("%s %v", name, err)
+	}
+	netConnReader := bufio.NewReader(netConn)
+	return &chatClient{
+		name:          name,
+		netConn:       &netConn,
+		netConnReader: netConnReader,
+	}, nil
+}
+
+func (c *chatClient) matchSubstringsOrFailTestWithTimeout(t *testing.T, expectSubstrs ...string) {
+	for _, expectSubstr := range expectSubstrs {
+		result, err := c.readStringWithTimeout(t)
+		if err != nil {
+			t.Fatalf("%s %v", c.name, err)
+		}
+		if !strings.Contains(result, expectSubstr) {
+			t.Fatalf("client %s expected substring %q was not found in %q", c.name, expectSubstr, result)
+		}
+		t.Logf("client %s matched substring %q in %q", c.name, expectSubstr, result)
+	}
+}
+
 // readStringWithTimeout reads the supplied bufio.Reader and returns the
 // resulting string, or calls t.Fatal() if the Reader returned an
 // "deadline exceeded" error. The deadline; timeout is managed outside of this
 // function, via previously calling SetReadDeadline() on a net.Conn type,
 // then creating a bufio.Reader from that net.Conn.
-func readStringWithTimeout(t *testing.T, r *bufio.Reader) (result string, err error) {
-	result, err = r.ReadString('\n')
+func (c *chatClient) readStringWithTimeout(t *testing.T) (result string, err error) {
+	result, err = c.netConnReader.ReadString('\n')
 	if err != nil {
 		if errors.Is(err, os.ErrDeadlineExceeded) { // underlying net.Conn deadline reached, via SetReadDeadline()
-			t.Fatal("exceeded timeout while waiting to read")
+			t.Fatalf("client %s exceeded timeout while waiting to read", c.name)
 		}
-		return "", err
+		return "", fmt.Errorf("client %s %v", c.name, err)
 	}
 	return result, nil
-}
-
-func matchSubstringsOrFailTestWithTimeout(t *testing.T, r *bufio.Reader, expectSubstrs ...string) {
-	for _, expectSubstr := range expectSubstrs {
-		result, err := readStringWithTimeout(t, r)
-		if err != nil {
-			t.Error(err)
-		}
-		if !strings.Contains(result, expectSubstr) {
-			t.Fatalf("expected substring %q not found in %q", expectSubstr, result)
-		}
-		t.Logf("matched substring %q in %q", expectSubstr, result)
-	}
 }
 
 func TestChatSession(t *testing.T) {
@@ -51,62 +74,52 @@ func TestChatSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.Run()
-	client1, err := net.Dial("tcp", server.GetListenAddress())
+	server.ListenAndServe()
+	client1, err := newChatClient("1", server.GetListenAddress())
 	if err != nil {
-		t.Fatalf("client 1 cannot connect to chat server: %v", err)
+		t.Error(err)
 	}
-	client1.SetReadDeadline(time.Now().Add(3 * time.Second))
 	t.Log("starting to read from client 1")
-	client1Reader := bufio.NewReader(client1)
-	matchSubstringsOrFailTestWithTimeout(t, client1Reader,
+	client1.matchSubstringsOrFailTestWithTimeout(t,
 		"hello there",
 		"\n",
 		"Anything you type will be sent to all other users",
 		"enter /help for a list",
 		"has joined the chat",
 	)
-	if err != nil {
-		t.Fatalf("error while reading from client 1: %v", err)
-	}
 
-	client2, err := net.Dial("tcp", server.GetListenAddress())
+	client2, err := newChatClient("1", server.GetListenAddress())
 	if err != nil {
-		t.Fatalf("client 2 cannot connect to chat server: %v", err)
+		t.Error(err)
 	}
-	client2.SetReadDeadline(time.Now().Add(3 * time.Second))
 	t.Log("starting to read from client 2")
-	client2Reader := bufio.NewReader(client2)
-	matchSubstringsOrFailTestWithTimeout(t, client2Reader,
+	client2.matchSubstringsOrFailTestWithTimeout(t,
 		"hello there",
 		"\n",
 		"Anything you type will be sent to all other users",
 		"enter /help for a list",
 		"has joined the chat",
 	)
-	if err != nil {
-		t.Fatalf("error while reading from client 2: %v", err)
-	}
 
-	matchSubstringsOrFailTestWithTimeout(t, client1Reader, "has joined the chat") // client2 joining
+	client1.matchSubstringsOrFailTestWithTimeout(t, "has joined the chat") // client2 joining
 
-	fmt.Fprintln(client1, "/nick client1")
-	matchSubstringsOrFailTestWithTimeout(t, client1Reader, "now known as \"client1\"")
-	matchSubstringsOrFailTestWithTimeout(t, client2Reader, "now known as \"client1\"")
+	fmt.Fprintln(*client1.netConn, "/nick client1")
+	client1.matchSubstringsOrFailTestWithTimeout(t, "now known as \"client1\"")
+	client2.matchSubstringsOrFailTestWithTimeout(t, "now known as \"client1\"")
 
-	fmt.Fprintln(client2, "/nick client2")
-	matchSubstringsOrFailTestWithTimeout(t, client1Reader, "now known as \"client2\"")
-	matchSubstringsOrFailTestWithTimeout(t, client2Reader, "now known as \"client2\"")
+	fmt.Fprintln(*client2.netConn, "/nick client2")
+	client1.matchSubstringsOrFailTestWithTimeout(t, "now known as \"client2\"")
+	client2.matchSubstringsOrFailTestWithTimeout(t, "now known as \"client2\"")
 
-	fmt.Fprintln(client1, "first message")
-	matchSubstringsOrFailTestWithTimeout(t, client1Reader, "> first message")
-	matchSubstringsOrFailTestWithTimeout(t, client2Reader, "client1> first message")
+	fmt.Fprintln(*client1.netConn, "first message")
+	client1.matchSubstringsOrFailTestWithTimeout(t, "> first message")
+	client2.matchSubstringsOrFailTestWithTimeout(t, "client1> first message")
 
-	fmt.Fprintln(client2, "/quit")
-	matchSubstringsOrFailTestWithTimeout(t, client1Reader, "client2 has left the chat")
+	fmt.Fprintln(*client2.netConn, "/quit")
+	client1.matchSubstringsOrFailTestWithTimeout(t, "client2 has left the chat")
 
-	fmt.Fprintln(client1, "/help")
-	matchSubstringsOrFailTestWithTimeout(t, client1Reader,
+	fmt.Fprintln(*client1.netConn, "/help")
+	client1.matchSubstringsOrFailTestWithTimeout(t,
 		"Available commands are",
 		"Sign off and disconnect",
 		"Set your nickname",
@@ -114,7 +127,7 @@ func TestChatSession(t *testing.T) {
 
 	t.Log("stopping chat server")
 	server.InitiateShutdown(true)
-	matchSubstringsOrFailTestWithTimeout(t, client1Reader, "the chat server is shutting down")
+	client1.matchSubstringsOrFailTestWithTimeout(t, "the chat server is shutting down")
 	go server.WaitForExit() // Causes server.HasExited() == true
 	for !server.HasExited() {
 		select {
