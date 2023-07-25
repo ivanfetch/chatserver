@@ -21,6 +21,9 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+var Version string = "development" // Populated at build time
+var GitCommit string = "unknown"   // Populated at build time
+
 // connection holds information about a connection to the chat server.
 type connection struct {
 	netConn          net.Conn // TCP connection
@@ -451,17 +454,5 @@ func (s *Server) ListenAndServe() error {
 	s.log.Infof("listening for connections on %s", s.listenAddress)
 	s.startConnectionAccepter()
 	s.startConnectionAndMessageManager()
-	return nil
-}
-
-// CreateAndRun instantiates a new chat server, calls ListenAndServe, then
-// waits for the chat server routines to cleanup and exit.
-func CreateAndRun() error {
-	server, err := NewServer()
-	if err != nil {
-		return err
-	}
-	server.ListenAndServe()
-	server.WaitForExit()
 	return nil
 }
