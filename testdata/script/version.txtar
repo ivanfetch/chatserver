@@ -1,0 +1,2 @@
+! exec chatserver --version
+stdout 'version development, git commit unknown'

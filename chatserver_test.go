@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"os"
 	"strings"
@@ -74,9 +74,9 @@ func TestChatSession(t *testing.T) {
 	var err error
 	var server *chat.Server
 	if testing.Verbose() {
-		server, err = chat.NewServer(chat.WithDebugLogging())
+		server, err = chat.NewServer(chat.WithDebugLogging(), chat.WithListenAddress(":8888"))
 	} else {
-		server, err = chat.NewServer(chat.WithLogWriter(ioutil.Discard)) // discard non-debug status output
+		server, err = chat.NewServer(chat.WithLogWriter(io.Discard), chat.WithListenAddress(":8888")) // discard non-debug status output
 	}
 	if err != nil {
 		t.Fatal(err)

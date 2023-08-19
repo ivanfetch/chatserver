@@ -1,0 +1,4 @@
+! chatserver --help
+stdout 'Use a program like telnet, or nc'
+stderr 'Enable debug logging'
+stderr 'The TCP address the chat server should listen on,'

@@ -1,0 +1,2 @@
+exec chatserver --listen-address :5678
+stderr 'listening for connections on :5678'

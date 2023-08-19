@@ -9,17 +9,34 @@ import (
 	flag "github.com/spf13/pflag"
 )
 
-// RunCLI processes command-line arguments, instantiates a new chat server, calls ListenAndServe, then
-// waits for the chat server routines to cleanup and exit.
-func RunCLI() int {
+// RunCLI processes command-line arguments, instantiates a new chat server,
+// calls ListenAndServe, then optionally waits for chat server routines to exit.
+func processCLIArgsAndRunServer(waitForExit bool) int {
 	server, err := NewServerFromArgs(os.Args[1:])
 	if err != nil {
 		fmt.Println(err)
 		return 1
 	}
 	server.ListenAndServe()
-	server.WaitForExit()
+	if waitForExit {
+		server.WaitForExit()
+	}
 	return 0
+}
+
+// RunCLI processes command-line arguments, instantiates a new chat server, calls ListenAndServe, then
+// waits for the chat server routines to cleanup and exit.
+func RunCLI() int {
+	return processCLIArgsAndRunServer(true)
+}
+
+// RunCLIWithoutWaitingForExit processes command-line arguments, instantiates
+// a new chat server, calls ListenAndServe, but does not wait for the chat
+// server routines to exit.
+// This is useful for Go TestScript tests, which can avoid retaining and
+// calling cleanup methods on the chat server.
+func RunCLIWithoutWaitingForExit() int {
+	return processCLIArgsAndRunServer(false)
 }
 
 // NewServerFromArgs returns a type *Server after processing command-line
@@ -50,7 +67,7 @@ The listen address can also be set by setting the CHATSERVER_LISTEN_ADDRESS envi
 	}
 	fs.VisitAll(setCLIFlagFromEnvVar)
 	if *CLIVersion {
-		return nil, fmt.Errorf("version %s, git commit %s\n", Version, GitCommit)
+		return nil, fmt.Errorf("version %s, git commit %s", Version, GitCommit)
 	}
 	var optionalConfig []ServerOption
 	if *CLIDebugLogging {
@@ -77,6 +94,10 @@ func setCLIFlagFromEnvVar(f *flag.Flag) {
 	envVarName := "CHATSERVER_" + strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_"))
 	envVarValue := os.Getenv(envVarName)
 	if envVarValue != "" && f.Value.String() == f.DefValue {
-		_ = f.Value.Set(envVarValue)
+		err := f.Value.Set(envVarValue)
+		if err != nil {
+			// The error is not returned because FlagSet.VisitAll will not accept it.
+			panic(fmt.Errorf("while setting value %q to flag %v: %w", envVarValue, f, err))
+		}
 	}
 }
