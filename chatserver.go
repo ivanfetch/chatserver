@@ -223,7 +223,7 @@ type Server struct {
 
 // ServerOption uses a function  to set fields on a type Server by operating on
 // that type as an argument.
-// This provides optional configuration and minimizes required parameters for
+// This is the "functional options" pattern, and provides optional configuration and minimizes required parameters for
 // the constructor.
 type ServerOption func(*Server) error
 
@@ -297,8 +297,14 @@ func (s *Server) createLog() {
 	s.log = log
 }
 
-// GetListenAddress returns the listen address of the chat server net.Listener.
+// GetListenAddress returns the listen address on which the chat server is
+// listening, or
+// intends to use, depending on whether the server is currently listening for
+// connections.
 func (s Server) GetListenAddress() string {
+	if s.listener == nil {
+		return s.listenAddress
+	}
 	return s.listener.Addr().String()
 }
 
@@ -449,7 +455,7 @@ func (s *Server) ListenAndServe() error {
 	if err != nil {
 		return fmt.Errorf("cannot listen on %s: %v", s.listenAddress, err)
 	}
-	s.log.Infof("listening for connections on %s", s.GetListenAddress())
+	s.log.Infof("listening for connections on %s - press CTRL-c to stop the chat server", s.GetListenAddress())
 	s.startConnectionAccepter()
 	s.startConnectionAndMessageManager()
 	return nil

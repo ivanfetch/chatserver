@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/sirupsen/logrus"
@@ -31,4 +32,14 @@ func TestNewServerFromArgsWithInvalidListenAddress(t *testing.T) {
 	if err == nil {
 		t.Fatal("did not receive an expected error")
 	}
+}
+
+func ExampleNewServerFromArgs() {
+	server, err := NewServerFromArgs([]string{"--debug-logging", "--listen-address", ":9999"})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("This server has debugging enabled and is listening on %s", server.GetListenAddress())
+	// Output:
+	// This server has debugging enabled and is listening on :9999
 }

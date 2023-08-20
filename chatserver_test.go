@@ -81,7 +81,10 @@ func TestChatSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server.ListenAndServe()
+	err = server.ListenAndServe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	client1, err := newChatClient("1", server.GetListenAddress())
 	if err != nil {
 		t.Error(err)
@@ -146,4 +149,14 @@ func TestChatSession(t *testing.T) {
 			}
 		}
 	}
+}
+
+func ExampleNewServer() {
+	server, err := chat.NewServer(chat.WithDebugLogging(), chat.WithListenAddress(":9999"))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("This server has debugging enabled and is listening on %s", server.GetListenAddress())
+	// Output:
+	// This server has debugging enabled and is listening on :9999
 }
