@@ -3,7 +3,7 @@ package chat
 // This multi-user chat server helps me learn concurrency.
 // This is a learning project, please don't count on it improving, or even
 // working entirely well.
-// You can use nc or telnet to connect to localhost port 8080,
+// You can use nc or telnet to connect to localhost port 40001,
 // and chat with this server.
 
 import (
@@ -268,7 +268,7 @@ func WithLogWriter(w io.Writer) ServerOption {
 func NewServer(options ...ServerOption) (*Server, error) {
 	openForBusiness, stopReceivingSignals := signal.NotifyContext(context.Background(), os.Interrupt)
 	s := &Server{
-		listenAddress:        ":8080",
+		listenAddress:        ":40001",
 		openForBusiness:      openForBusiness,
 		stopReceivingSignals: stopReceivingSignals,
 		addConnCh:            make(chan *connection),

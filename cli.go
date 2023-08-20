@@ -17,7 +17,11 @@ func processCLIArgsAndRunServer(waitForExit bool) int {
 		fmt.Println(err)
 		return 1
 	}
-	server.ListenAndServe()
+	err = server.ListenAndServe()
+	if err != nil {
+		fmt.Println(err)
+		return 1
+	}
 	if waitForExit {
 		server.WaitForExit()
 	}
@@ -60,7 +64,7 @@ The listen address can also be set by setting the CHATSERVER_LISTEN_ADDRESS envi
 
 	CLIDebugLogging := fs.BoolP("debug-logging", "d", false, "Enable debug logging")
 	CLIVersion := fs.BoolP("version", "v", false, "Display the version and git commit.")
-	CLIListenAddress := fs.StringP("listen-address", "l", ":8080", "The TCP address the chat server should listen on, of the form IP:Port or :Port. For example, :9090 or 1.2.3.4:9090")
+	CLIListenAddress := fs.StringP("listen-address", "l", ":40001", "The TCP address the chat server should listen on, of the form IP:Port or :Port. For example, :9090 or 1.2.3.4:9090")
 	err := fs.Parse(args)
 	if err != nil {
 		return nil, err
