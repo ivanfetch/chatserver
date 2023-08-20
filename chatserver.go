@@ -247,6 +247,7 @@ func WithDebugLogging() ServerOption {
 			s.createLog()
 		}
 		s.log.SetLevel(logrus.DebugLevel)
+		s.log.Debugln("debug logging enabled") // THis helps satisfy testing debug logging
 		return nil
 	}
 }

@@ -1,2 +1,3 @@
 chatserver --debug-logging
-stderr 'level=debug'
+stderr 'debug logging enabled'
+
