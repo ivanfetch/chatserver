@@ -1,3 +1,3 @@
 env CHATSERVER_LISTEN_ADDRESS=':8765'
 exec chatserver
-stderr 'listening for connections on :8765'
+stderr 'listening for connections on .+:8765'

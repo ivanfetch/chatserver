@@ -1,10 +1,8 @@
 package chat
 
 // This multi-user chat server helps me learn concurrency.
-// This is a learning project, please don't count on it improving, or even
-// working entirely well.
-// You can use nc or telnet to connect to localhost port 40001,
-// and chat with this server.
+// You can use netcat or telnet to connect to its TCP port.
+// This is a learning project, please don't count on it improving.
 
 import (
 	"bufio"
@@ -135,6 +133,7 @@ func (c *connection) processInput() {
 Anything you type will be sent to all other users of this chat server.
 A line that begins with a slash (/) is considered a command - enter /help for a list of valid commands. `)
 	scanner := bufio.NewScanner(c)
+	c.server.sendSystemMessage(fmt.Sprintf("%s has joined the chat", c.GetNickname()))
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -269,7 +268,7 @@ func WithLogWriter(w io.Writer) ServerOption {
 func NewServer(options ...ServerOption) (*Server, error) {
 	openForBusiness, stopReceivingSignals := signal.NotifyContext(context.Background(), os.Interrupt)
 	s := &Server{
-		listenAddress:        ":40001",
+		listenAddress:        ":0",
 		openForBusiness:      openForBusiness,
 		stopReceivingSignals: stopReceivingSignals,
 		addConnCh:            make(chan *connection),
@@ -298,10 +297,9 @@ func (s *Server) createLog() {
 	s.log = log
 }
 
-// GetListenAddress returns the listen address of the chat server, of the form
-// host:port or :port.
+// GetListenAddress returns the listen address of the chat server net.Listener.
 func (s Server) GetListenAddress() string {
-	return s.listenAddress
+	return s.listener.Addr().String()
 }
 
 // startConnectionAccepter starts a goroutine that accepts connections to the
@@ -347,7 +345,6 @@ func (s *Server) startConnectionAndMessageManager() {
 			case newConn := <-s.addConnCh:
 				s.log.Debugf("adding connection from %s", newConn.UniqueID())
 				currentConnections = append(currentConnections, newConn)
-				s.sendSystemMessage(fmt.Sprintf("%s has joined the chat", newConn.GetNickname()))
 				s.numConnections = len(currentConnections)
 			case removeConn := <-s.removeConnCh:
 				s.log.Debugf("removing connection %s", removeConn.UniqueID())
@@ -452,7 +449,7 @@ func (s *Server) ListenAndServe() error {
 	if err != nil {
 		return fmt.Errorf("cannot listen on %s: %v", s.listenAddress, err)
 	}
-	s.log.Infof("listening for connections on %s", s.listenAddress)
+	s.log.Infof("listening for connections on %s", s.GetListenAddress())
 	s.startConnectionAccepter()
 	s.startConnectionAndMessageManager()
 	return nil

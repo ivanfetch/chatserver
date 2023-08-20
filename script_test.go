@@ -10,6 +10,12 @@ import (
 	"github.com/rogpeppe/go-internal/testscript"
 )
 
+var testScriptSetup func(*testscript.Env) error = func(e *testscript.Env) error {
+	// default to use a random chat server TCP listener port.
+	e.Vars = append(e.Vars, "CHATSERVER_LISTEN_ADDRESS=:0")
+	return nil
+}
+
 func TestMain(m *testing.M) {
 	os.Exit(testscript.RunMain(m, map[string]func() int{
 		"chatserver": chat.RunCLIWithoutWaitingForExit,
@@ -18,6 +24,7 @@ func TestMain(m *testing.M) {
 
 func TestScript(t *testing.T) {
 	testscript.Run(t, testscript.Params{
-		Dir: "testdata/script",
+		Setup: testScriptSetup,
+		Dir:   "testdata/script",
 	})
 }
