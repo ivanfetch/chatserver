@@ -1,0 +1,3 @@
+env CHATSERVER_DEBUG_LOGGING=1
+exec chatserver
+stderr 'debug logging enabled'

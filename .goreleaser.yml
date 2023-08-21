@@ -1,0 +1,28 @@
+# As this is a learning project with less frequent releases, goreleaser is
+# only run locally, not in CI.
+builds:
+- ldflags:
+  - -X github.com/ivanfetch/chatserver.Version={{.Version}} -X github.com/ivanfetch/chatserver.GitCommit={{.Commit}} -s -w
+  env:
+  - CGO_ENABLED=0
+  main: ./cmd/chatserver
+  # goreleaser builds a matrix of the GOOS, GOArch, and GOARM listed below,
+  # minus those under `ignore`.
+  goarch:
+  - 386
+  - amd64
+  - arm
+  - arm64
+  goos:
+  - linux
+  - darwin
+  - windows
+  goarm:
+  - 6
+  - 7
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
