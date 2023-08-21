@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +26,8 @@ func newChatClient(name, connectAddress string) (*chatClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s %v", name, err)
 	}
-	err = netConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	// This timeout is used by the client readStringWithTimeout method.
+	err = netConn.SetReadDeadline(time.Now().Add(getOSSpecificNetworkReadTimeout()))
 	if err != nil {
 		return nil, fmt.Errorf("%s %v", name, err)
 	}
@@ -39,7 +41,7 @@ func newChatClient(name, connectAddress string) (*chatClient, error) {
 
 func (c *chatClient) matchSubstringsOrFailTestWithTimeout(t *testing.T, expectSubstrs ...string) {
 	for _, expectSubstr := range expectSubstrs {
-		result, err := c.readStringWithTimeout(t)
+		result, err := c.readStringWithTimeout(t, expectSubstr)
 		if err != nil {
 			t.Fatalf("%s %v", c.name, err)
 		}
@@ -55,20 +57,46 @@ func (c *chatClient) matchSubstringsOrFailTestWithTimeout(t *testing.T, expectSu
 // "deadline exceeded" error. The deadline; timeout is managed outside of this
 // function, via previously calling SetReadDeadline() on a net.Conn type,
 // then creating a bufio.Reader from that net.Conn.
-func (c *chatClient) readStringWithTimeout(t *testing.T) (result string, err error) {
+// The `expected` parameter is only used to provide context in the error message
+// when failing the test.
+func (c *chatClient) readStringWithTimeout(t *testing.T, expected string) (result string, err error) {
 	result, err = c.netConnReader.ReadString('\n')
 	if err != nil {
 		if errors.Is(err, os.ErrDeadlineExceeded) { // underlying net.Conn deadline reached, via SetReadDeadline()
-			t.Fatalf("client %s exceeded timeout while waiting to read", c.name)
+			t.Fatalf("client %s exceeded timeout while waiting to read expected string %q", c.name, expected)
 		}
 		return "", fmt.Errorf("client %s %v", c.name, err)
 	}
 	return result, nil
 }
 
+// getOSSpecificPerTestTimeout returns how long a single test should be given
+// to complete, depending on which operating system is executing the test.
+func getOSSpecificPerTestTimeout() time.Duration {
+	switch runtime.GOOS {
+	case "windows":
+		// WIndows Github runners take 3-5X longer to execute `go test`
+		return 60 * time.Second
+	default:
+		return 5 * time.Second
+	}
+}
+
+// getOSSpecificNetworkReadTimeout returns how long a network read operation
+// should be given to complete, depending on which operating system is executing the test.
+func getOSSpecificNetworkReadTimeout() time.Duration {
+	switch runtime.GOOS {
+	case "windows":
+		// WIndows Github runners take 3-5X longer to execute `go test`
+		return 15 * time.Second
+	default:
+		return 3 * time.Second
+	}
+}
+
 func TestChatSession(t *testing.T) {
 	t.Parallel()
-	timeout := time.NewTimer(5 * time.Second)
+	timeout := time.NewTimer(getOSSpecificPerTestTimeout())
 	defer timeout.Stop()
 	t.Log("starting chat server")
 	var err error
@@ -98,7 +126,7 @@ func TestChatSession(t *testing.T) {
 		"has joined the chat",
 	)
 
-	client2, err := newChatClient("1", server.GetListenAddress())
+	client2, err := newChatClient("2", server.GetListenAddress())
 	if err != nil {
 		t.Error(err)
 	}

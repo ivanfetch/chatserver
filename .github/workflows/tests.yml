@@ -1,0 +1,28 @@
+# Based on https://github.com/bitfield/script/blob/master/.github/workflows/test.yml
+on: [push, pull_request]
+name: Tests
+jobs:
+  test:
+    strategy:
+      matrix:
+        go-version: ['stable', 'oldstable']
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v4
+        with:
+          go-version: ${{ matrix.go-version }}
+      - run: go test ./...
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: golang/govulncheck-action@v1
+  gocritic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v4
+      - run: |
+          go install github.com/go-critic/go-critic/cmd/gocritic@latest
+          gocritic check .
