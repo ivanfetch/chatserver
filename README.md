@@ -1,5 +1,8 @@
 # Chat Server - A Go Concurrency Learning Project
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/ivanfetch/chatserver.svg)](https://pkg.go.dev/github.com/ivanfetch/chatserver)
+![Tests](https://github.com/ivanfetch/chatserver/actions/workflows/tests.yml/badge.svg)
+
 This chat server accepts TCP connections, and allows users to broadcast messages, change their nickname, and of course, disconnect. You can connect to the chat server using a utility like [netcat](https://en.wikipedia.org/wiki/Netcat) or telnet.
 
 ## Usage
