@@ -23,6 +23,10 @@ go.sum:go.mod
 test:go.sum
 	go test -coverprofile=cover.out ./...
 
+test-profile:go.sum
+	go test -coverprofile=cover.out -blockprofile  blockgoroutines.pprof
+	rm chatserver.test
+
 .PHONY: binary
 binary:go.sum
 	go build -ldflags $(LDFLAGS) -o $(BINARY) cmd/chatserver/main.go

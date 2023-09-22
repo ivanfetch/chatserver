@@ -1,4 +1,5 @@
 chatserver
 cover.out
+*.pprof
 dist
 notes.txt

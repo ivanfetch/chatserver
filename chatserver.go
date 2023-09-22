@@ -221,7 +221,8 @@ type Server struct {
 	stopReceivingSignals    context.CancelFunc // Stop receiving notifications for OS signals
 	exitWG                  *sync.WaitGroup    // How many goroutines are started?
 	shuttingDown            bool               // cleanup / shutdown is in-process, do not accept new connections or messages.
-	hasExited               bool               // Cleanup has finished>
+	hasExited               bool               // Cleanup has finished.
+	enableProfiling         bool
 }
 
 // ServerOption uses a function  to set fields on a type Server by operating on
@@ -261,6 +262,15 @@ func WithLogWriter(w io.Writer) ServerOption {
 			s.createLog()
 		}
 		s.log.SetOutput(w)
+		return nil
+	}
+}
+
+// WithProfiling enables goroutine profiling, which begins when either
+// RunCLI() or RunCLIWithoutWaitingForExit() is called.
+func WithProfiling() ServerOption {
+	return func(s *Server) error {
+		s.enableProfiling = true
 		return nil
 	}
 }
