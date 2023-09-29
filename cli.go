@@ -11,9 +11,9 @@ import (
 )
 
 // RunCLI processes command-line arguments, instantiates a new chat server,
-// calls ListenAndServe, optionally waits for chat server routines to exit,
+// calls ListenAndServe, waits for chat server routines to exit,
 // then returns an exit status code.
-func processCLIArgsAndRunServer(waitForExit bool) int {
+func RunCLI() int {
 	server, err := NewServerFromArgs(os.Args[1:])
 	if err != nil {
 		fmt.Println(err)
@@ -27,27 +27,8 @@ func processCLIArgsAndRunServer(waitForExit bool) int {
 		fmt.Println(err)
 		return 1
 	}
-	if waitForExit {
-		server.WaitForExit()
-	}
+	server.WaitForExit()
 	return 0
-}
-
-// RunCLI processes command-line arguments, instantiates a new chat server, calls ListenAndServe,
-// waits for the chat server routines to cleanup and exit, then returns an
-// exit status code.
-func RunCLI() int {
-	return processCLIArgsAndRunServer(true)
-}
-
-// RunCLIWithoutWaitingForExit processes command-line arguments, instantiates
-// a new chat server, calls ListenAndServe, then returns an exit status code
-// without waiting for the chat
-// server routines to exit.
-// This is useful for Go TestScript tests, which can avoid retaining and
-// calling cleanup methods on the chat server.
-func RunCLIWithoutWaitingForExit() int {
-	return processCLIArgsAndRunServer(false)
 }
 
 // NewServerFromArgs returns a type *Server after processing command-line

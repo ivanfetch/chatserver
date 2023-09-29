@@ -18,7 +18,7 @@ var testScriptSetup func(*testscript.Env) error = func(e *testscript.Env) error 
 
 func TestMain(m *testing.M) {
 	os.Exit(testscript.RunMain(m, map[string]func() int{
-		"chatserver": chat.RunCLIWithoutWaitingForExit,
+		"chatserver": chat.RunCLI,
 	}))
 }
 

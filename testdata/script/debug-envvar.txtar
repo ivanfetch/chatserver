@@ -1,3 +1,4 @@
 env CHATSERVER_DEBUG_LOGGING=1
-exec chatserver
+! exec chatserver &
+stop
 stderr 'debug logging enabled'

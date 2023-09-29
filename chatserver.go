@@ -279,15 +279,12 @@ func WithProfiling() ServerOption {
 // optional parameters can be specified via With*()
 // functional options.
 func NewServer(options ...ServerOption) (*Server, error) {
-	openForBusiness, stopReceivingSignals := signal.NotifyContext(context.Background(), os.Interrupt)
 	s := &Server{
-		listenAddress:        ":0",
-		openForBusiness:      openForBusiness,
-		stopReceivingSignals: stopReceivingSignals,
-		addConnCh:            make(chan *connection),
-		removeConnCh:         make(chan *connection),
-		addMessageCh:         make(chan message),
-		exitWG:               &sync.WaitGroup{},
+		listenAddress: ":0",
+		addConnCh:     make(chan *connection),
+		removeConnCh:  make(chan *connection),
+		addMessageCh:  make(chan message),
+		exitWG:        &sync.WaitGroup{},
 	}
 	s.createLog()
 	for _, option := range options {
@@ -469,6 +466,7 @@ func (s *Server) ListenAndServe() error {
 		return fmt.Errorf("cannot listen on %s: %v", s.listenAddress, err)
 	}
 	s.log.Infof("listening for connections on %s - press CTRL-c to stop the chat server", s.GetListenAddress())
+	s.openForBusiness, s.stopReceivingSignals = signal.NotifyContext(context.Background(), os.Interrupt)
 	s.startConnectionAccepter()
 	s.startConnectionAndMessageManager()
 	return nil

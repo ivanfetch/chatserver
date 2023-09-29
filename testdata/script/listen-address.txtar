@@ -1,2 +1,3 @@
-exec chatserver --listen-address :5678
+! exec chatserver --listen-address :5678 &
+stop
 stderr 'listening for connections on .+:5678'
