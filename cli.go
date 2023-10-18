@@ -34,7 +34,11 @@ func RunCLI() int {
 // NewServerFromArgs returns a type *Server after processing command-line
 // arguments and environment variables.
 func NewServerFromArgs(args []string) (*Server, error) {
-	fs := flag.NewFlagSet("chatserver", flag.ExitOnError)
+	binaryName := filepath.Base(os.Args[0])
+	if binaryName == "" {
+		binaryName = "chatserver"
+	}
+	fs := flag.NewFlagSet(binaryName, flag.ExitOnError)
 	CLIDebugLogging := fs.BoolP("debug-logging", "d", false, "Enable debug logging. This can also be enabled by setting the CHATSERVER_DEBUG_LOGGING environment variable to any value.")
 	CLIProfiling := fs.BoolP("enable-profiling", "P", false, "Enable goroutine profiling. The resulting goroutine.pprof file will be written to the current directory at the time the chat server was run. This can also be enabled by setting the CHATSERVER_ENABLE_PROFILING environment variable to any value.")
 	CLIVersion := fs.BoolP("version", "v", false, "Display the version and git commit.")
@@ -47,7 +51,7 @@ Use a program like telnet, or nc (netcat), to connect to the chat server. Anythi
 Usage: %s [-d|--debug-logging] [-l|--listen-address [<IP address>]:<port>] [-v|--version]
 
 `,
-			filepath.Base(os.Args[0]))
+			binaryName)
 		fs.PrintDefaults() // Print defined flags
 	}
 	err := fs.Parse(args)
