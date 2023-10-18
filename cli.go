@@ -32,9 +32,13 @@ func RunCLI() int {
 }
 
 // NewServerFromArgs returns a type *Server after processing command-line
-// arguments.
+// arguments and environment variables.
 func NewServerFromArgs(args []string) (*Server, error) {
 	fs := flag.NewFlagSet("chatserver", flag.ExitOnError)
+	CLIDebugLogging := fs.BoolP("debug-logging", "d", false, "Enable debug logging. This can also be enabled by setting the CHATSERVER_DEBUG_LOGGING environment variable to any value.")
+	CLIProfiling := fs.BoolP("enable-profiling", "P", false, "Enable goroutine profiling. The resulting goroutine.pprof file will be written to the current directory at the time the chat server was run. This can also be enabled by setting the CHATSERVER_ENABLE_PROFILING environment variable to any value.")
+	CLIVersion := fs.BoolP("version", "v", false, "Display the version and git commit.")
+	CLIListenAddress := fs.StringP("listen-address", "l", ":40001", "The TCP address the chat server should listen on, of the form IP:Port or :Port. For example, :9090 or 1.2.3.4:9090. This can also be set via the CHATSERVER_LISTEN_ADDRESS environment variable.")
 	fs.Usage = func() {
 		fmt.Printf(`This chat server operates like a very basic version of Internet Relay Chat (IRC).
 
@@ -44,18 +48,13 @@ Usage: %s [-d|--debug-logging] [-l|--listen-address [<IP address>]:<port>] [-v|-
 
 `,
 			filepath.Base(os.Args[0]))
-		fs.PrintDefaults()
+		fs.PrintDefaults() // Print defined flags
 	}
-
-	CLIDebugLogging := fs.BoolP("debug-logging", "d", false, "Enable debug logging. This can also be enabled by setting the CHATSERVER_DEBUG_LOGGING environment variable to any value.")
-	CLIProfiling := fs.BoolP("enable-profiling", "P", false, "Enable goroutine profiling. The resulting goroutine.pprof file will be written to the current directory at the time the chat server was run. This can also be enabled by setting the CHATSERVER_ENABLE_PROFILING environment variable to any value.")
-	CLIVersion := fs.BoolP("version", "v", false, "Display the version and git commit.")
-	CLIListenAddress := fs.StringP("listen-address", "l", ":40001", "The TCP address the chat server should listen on, of the form IP:Port or :Port. For example, :9090 or 1.2.3.4:9090. This can also be set via the CHATSERVER_LISTEN_ADDRESS environment variable.")
 	err := fs.Parse(args)
 	if err != nil {
 		return nil, err
 	}
-	fs.VisitAll(setCLIFlagFromEnvVar)
+	populateUnsetFlagsFromEnvVars(fs)
 	if *CLIVersion {
 		return nil, fmt.Errorf("version %s, git commit %s", Version, GitCommit)
 	}
@@ -69,7 +68,6 @@ Usage: %s [-d|--debug-logging] [-l|--listen-address [<IP address>]:<port>] [-v|-
 	if *CLIListenAddress != "" {
 		optionalConfig = append(optionalConfig, WithListenAddress(*CLIListenAddress))
 	}
-
 	server, err := NewServer(optionalConfig...)
 	if err != nil {
 		return nil, err
@@ -77,20 +75,24 @@ Usage: %s [-d|--debug-logging] [-l|--listen-address [<IP address>]:<port>] [-v|-
 	return server, nil
 }
 
-// setCLIFlagFromEnvVar iterates the flags defined in a type Flag, and sets
-// the values of any flags whos corresponding environment variable is set.
+// populateUnsetFlagsFromEnvVars iterates the flags in the specified type
+// flag.FlagSet, and uses the value of a corresponding environment variable to
+// set any flags whos values have not ben specified on the command-line.
 // Environment variable names use the form CHATSERVER_{flag name}, with any
 // dashes replaced by underscores
 // For example, flag debug-logging uses the environment variable
 // CHATSERVER_DEBUG_LOGGING
-func setCLIFlagFromEnvVar(f *flag.Flag) {
-	envVarName := "CHATSERVER_" + strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_"))
-	envVarValue := os.Getenv(envVarName)
-	if envVarValue != "" && f.Value.String() == f.DefValue {
-		err := f.Value.Set(envVarValue)
-		if err != nil {
-			// The error is not returned because FlagSet.VisitAll will not accept it.
-			panic(fmt.Errorf("while setting value %q to flag %v: %w", envVarValue, f, err))
+func populateUnsetFlagsFromEnvVars(fs *flag.FlagSet) {
+	const envVarNamePrefix = "CHATSERVER_"
+	fs.VisitAll(func(f *flag.Flag) { // FOr each flag in this FlagSet
+		envVarName := envVarNamePrefix + strings.ToUpper(strings.ReplaceAll(f.Name, "-", "_"))
+		envVarValue := os.Getenv(envVarName)
+		if envVarValue != "" && f.Value.String() == f.DefValue { // env var is set and this flag was not specified on the command-line
+			err := f.Value.Set(envVarValue)
+			if err != nil {
+				// The error is not returned because FlagSet.VisitAll will not accept it.
+				panic(fmt.Errorf("while setting value %q for flag %v from environment variable %s: %w", envVarValue, f, envVarName, err))
+			}
 		}
-	}
+	})
 }
